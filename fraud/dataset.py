@@ -1,4 +1,4 @@
-"""Ingesta: baja datos de fraude de Hugging Face a data/raw/ (distribución real)."""
+"""Ingesta: baja datos de fraude de Hugging Face a data/raw/ (distribución real)"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def load_raw(full: bool = False, n_rows: int = 200000, seed: int = 42) -> pd.Dat
     """Devuelve un DataFrame con la distribución real (sin balancear).
 
     full=True baja el dataset completo (~1.85M filas, ~500MB); si no, toma una
-    muestra aleatoria de n_rows filas por streaming (shuffle con buffer).
+    muestra aleatoria de n_rows filas por streaming (shuffle con buffer)
     """
     if full:
         logger.info(f"Descargando '{HF_DATASET}' COMPLETO...")
@@ -58,7 +58,7 @@ def main(
     n_rows: int = typer.Option(200000, help="Filas a muestrear si no se usa --full"),
     seed: int = typer.Option(42, help="Semilla del muestreo aleatorio"),
 ) -> None:
-    """Descarga los datos y los guarda en data/raw/fraud_sample.parquet."""
+    """Descarga los datos y los guarda en data/raw/fraud_sample.parquet"""
     df = load_raw(full=full, n_rows=n_rows, seed=seed)
 
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)

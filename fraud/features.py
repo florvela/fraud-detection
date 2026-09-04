@@ -1,4 +1,4 @@
-"""Features: deriva hour/age, arma la tabla y hace el split estratificado train/val/test."""
+"""Features: deriva hour/age, arma la tabla y hace el split estratificado train/val/test"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Deriva hour/age desde los campos de texto y devuelve solo FEATURES + TARGET."""
+    """Deriva hour/age desde los campos de texto y devuelve solo FEATURES + TARGET"""
     df = df.copy()
     df["hour"] = df["trans_date_trans_time"].str.slice(11, 13).astype(int)
     df["age"] = (
@@ -34,7 +34,7 @@ def split_data(
     val_size: float = 0.2,
     seed: int = 42,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split estratificado en train/val/test (preserva la proporción real de fraude)."""
+    """Split estratificado en train/val/test (preserva la proporción real de fraude)"""
     train_val, test = train_test_split(
         df, test_size=test_size, random_state=seed, stratify=df[TARGET]
     )
@@ -47,7 +47,7 @@ def split_data(
 
 @app.command()
 def main(seed: int = typer.Option(42, help="Semilla del split")) -> None:
-    """Lee data/raw, arma features, splitea y guarda en data/processed/."""
+    """Lee data/raw, arma features, splitea y guarda en data/processed/"""
     df = pd.read_parquet(RAW_DATA_DIR / "fraud_sample.parquet")
     features = build_features(df)
     train, val, test = split_data(features, seed=seed)

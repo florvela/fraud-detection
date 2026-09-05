@@ -18,4 +18,8 @@ pyarrow
 xgboost
 joblib
 pydantic
+fastapi
+uvicorn[standard]
+httpx
+requests
 -e .

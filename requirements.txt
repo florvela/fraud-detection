@@ -21,6 +21,7 @@ pydantic
 fastapi
 uvicorn[standard]
 strawberry-graphql
+neo4j
 httpx
 requests
 -e .

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import strawberry
 
+from fraud.api.lineage import get_lineage
 from fraud.api.model_loader import ModelStore
 
 MODEL_NAME = "fraud-detection"
@@ -19,10 +20,20 @@ class Metrics:
 
 
 @strawberry.type
+class LineageNode:
+    name: str
+    kind: str
+
+
+@strawberry.type
 class Model:
     name: str
     version: str
     metrics: Metrics
+
+    @strawberry.field
+    def lineage(self) -> list[LineageNode]:
+        return [LineageNode(name=r["name"], kind=r["kind"]) for r in get_lineage(self.name)]
 
 
 def _current_model() -> Model:

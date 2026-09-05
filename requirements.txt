@@ -17,4 +17,5 @@ datasets
 pyarrow
 xgboost
 joblib
+pydantic
 -e .

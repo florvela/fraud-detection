@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
 
 from fraud.api.model_loader import ModelStore
 from fraud.api.schemas import HealthResponse, PredictionResponse, Transaction
@@ -18,6 +20,16 @@ app = FastAPI(
     version=store.version if store.loaded else "0.0.0",
 )
 
+api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+_valid_tokens = os.getenv("API_KEYS", "token-secreto-123")
+AUTHORIZED_CLIENTS = {t.strip() for t in _valid_tokens.split(",") if t.strip()}
+
+
+def validate_token(api_key: str = Security(api_key_header)) -> str:
+    if api_key not in AUTHORIZED_CLIENTS:
+        raise HTTPException(status_code=403, detail="API Key inválida o ausente")
+    return api_key
+
 
 @app.get("/health", response_model=HealthResponse, tags=["Infra"])
 def health() -> HealthResponse:
@@ -27,7 +39,10 @@ def health() -> HealthResponse:
 
 
 @app.post("/v1/predict", response_model=PredictionResponse, tags=["Model v1"])
-def predict(transaction: Transaction) -> PredictionResponse:
+def predict(
+    transaction: Transaction,
+    _client: str = Security(validate_token),
+) -> PredictionResponse:
     if not store.loaded:
         raise HTTPException(status_code=503, detail="Modelo no disponible")
 

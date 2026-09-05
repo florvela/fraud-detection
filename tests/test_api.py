@@ -6,6 +6,8 @@ from fraud.api.main import app
 
 client = TestClient(app)
 
+HEADERS_OK = {"X-API-KEY": "token-secreto-123"}
+
 VALID_TX = {
     "amt": 120.5,
     "category": "grocery_pos",
@@ -29,7 +31,7 @@ def test_health_ok():
 
 
 def test_predict_valid_case():
-    resp = client.post("/v1/predict", json=VALID_TX)
+    resp = client.post("/v1/predict", json=VALID_TX, headers=HEADERS_OK)
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body["is_fraud"], bool)
@@ -39,29 +41,42 @@ def test_predict_valid_case():
 
 def test_predict_invalid_type_returns_422():
     tx = {**VALID_TX, "amt": "no_es_un_numero"}
-    assert client.post("/v1/predict", json=tx).status_code == 422
+    assert client.post("/v1/predict", json=tx, headers=HEADERS_OK).status_code == 422
 
 
 def test_predict_invalid_category_returns_422():
     tx = {**VALID_TX, "category": "cripto"}
-    assert client.post("/v1/predict", json=tx).status_code == 422
+    assert client.post("/v1/predict", json=tx, headers=HEADERS_OK).status_code == 422
 
 
 def test_predict_hour_out_of_range_returns_422():
     tx = {**VALID_TX, "hour": 99}
-    assert client.post("/v1/predict", json=tx).status_code == 422
+    assert client.post("/v1/predict", json=tx, headers=HEADERS_OK).status_code == 422
 
 
 def test_predict_missing_field_returns_422():
     tx = {k: v for k, v in VALID_TX.items() if k != "age"}
-    assert client.post("/v1/predict", json=tx).status_code == 422
+    assert client.post("/v1/predict", json=tx, headers=HEADERS_OK).status_code == 422
 
 
 def test_predict_non_positive_amount_returns_422():
     tx = {**VALID_TX, "amt": -5.0}
-    assert client.post("/v1/predict", json=tx).status_code == 422
+    assert client.post("/v1/predict", json=tx, headers=HEADERS_OK).status_code == 422
 
 
 def test_predict_extra_field_returns_422():
     tx = {**VALID_TX, "columna_extra": 1}
-    assert client.post("/v1/predict", json=tx).status_code == 422
+    assert client.post("/v1/predict", json=tx, headers=HEADERS_OK).status_code == 422
+
+
+def test_predict_invalid_token_returns_403():
+    resp = client.post("/v1/predict", json=VALID_TX, headers={"X-API-KEY": "token-equivocado"})
+    assert resp.status_code == 403
+
+
+def test_predict_no_token_returns_403():
+    assert client.post("/v1/predict", json=VALID_TX).status_code == 403
+
+
+def test_health_is_public_without_token():
+    assert client.get("/health").status_code == 200

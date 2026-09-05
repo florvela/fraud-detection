@@ -20,6 +20,7 @@ joblib
 pydantic
 fastapi
 uvicorn[standard]
+strawberry-graphql
 httpx
 requests
 -e .

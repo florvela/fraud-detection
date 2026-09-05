@@ -8,7 +8,9 @@ from enum import Enum
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
+from strawberry.fastapi import GraphQLRouter
 
+from fraud.api.graphql_schema import schema as graphql_schema
 from fraud.api.model_loader import ModelStore
 from fraud.api.schemas import HealthResponse, PredictionResponse, Transaction
 
@@ -62,3 +64,5 @@ def predict(
         probability=round(probability, 4),
         model_version=store.version,
     )
+
+app.include_router(GraphQLRouter(graphql_schema), prefix="/graphql")

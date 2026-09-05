@@ -35,6 +35,10 @@ class ModelStore:
     def feature_order(self) -> list[str]:
         return self._require()["feature_order"]
 
+    @property
+    def metrics(self) -> dict:
+        return self._require()["metrics"]
+
     def _require(self) -> dict:
         if self._artifact is None:
             raise RuntimeError(f"Modelo no cargado, se esperaba {MODEL_FILE}")

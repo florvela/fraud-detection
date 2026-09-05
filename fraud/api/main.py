@@ -65,4 +65,11 @@ def predict(
         model_version=store.version,
     )
 
+@app.get("/v1/model-info", tags=["Model v1"])
+def model_info() -> dict:
+    if not store.loaded:
+        raise HTTPException(status_code=503, detail="Modelo no disponible")
+    return {"name": "fraud-detection", **store.info}
+
+
 app.include_router(GraphQLRouter(graphql_schema), prefix="/graphql")

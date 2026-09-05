@@ -39,6 +39,10 @@ class ModelStore:
     def metrics(self) -> dict:
         return self._require()["metrics"]
 
+    @property
+    def info(self) -> dict:
+        return {k: v for k, v in self._require().items() if k != "pipeline"}
+
     def _require(self) -> dict:
         if self._artifact is None:
             raise RuntimeError(f"Modelo no cargado, se esperaba {MODEL_FILE}")

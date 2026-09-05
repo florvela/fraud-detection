@@ -6,8 +6,6 @@ MLOPs project for fraud detection
 
 Detección de fraude con tarjeta de crédito con un modelo XGBoost.
 
-
-
 Dataset: `pointe77/credit-card-transaction`
 (Hugging Face).
 
@@ -83,6 +81,46 @@ curl -X POST http://localhost:8080/v1/predict \
 ```
 
 Respuestas: `200` válido · `422` datos inválidos · `403` token ausente/incorrecto.
+
+## GraphQL (metadatos del modelo)
+
+La misma API expone los metadatos del modelo por GraphQL en `/graphql` (con
+GraphiQL habilitado). Con la API corriendo:
+
+```bash
+./.venv/bin/python client_graphql.py      # cliente Python de ejemplo
+```
+
+Query de ejemplo (pegar en GraphiQL: [http://localhost:8080/graphql](http://localhost:8080/graphql)):
+
+```graphql
+{ model { name version metrics { rocAuc prAuc } } }
+```
+
+
+
+## REST vs GraphQL
+
+Para armar la **misma vista** (`name` + `version` del modelo):
+
+
+|                             | Llamadas | Bytes |
+| --------------------------- | -------- | ----- |
+| REST (`GET /v1/model-info`) | 1        | 654   |
+| GraphQL (`POST /graphql`)   | 1        | 68    |
+
+
+Misma cantidad de llamadas, pero **REST transfiere ~10× más bytes**: el endpoint
+REST devuelve *todo* el metadata (features, categorías, dataset, `trained_at`…) aunque solo pidamos 2 campos.. **over-fetching**. GraphQL devuelve exactamente lo
+que la query pide. 
+
+Reproducilo:
+
+```bash
+./.venv/bin/python compare_rest_graphql.py
+```
+
+
 
 ## Project Organization
 

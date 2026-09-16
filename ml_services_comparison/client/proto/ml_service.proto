@@ -1,0 +1,36 @@
+syntax = "proto3";
+package ml_service;
+
+// Contrato tipado del servicio de scoring de fraude.
+// Los campos coinciden con las features que espera el modelo.
+message Transaction {
+  double amt = 1;          // monto de la transacción
+  string category = 2;     // rubro del comercio
+  string gender = 3;       // género del titular (F/M)
+  int32 city_pop = 4;      // población de la ciudad
+  double lat = 5;          // latitud del titular
+  double long = 6;         // longitud del titular
+  double merch_lat = 7;    // latitud del comercio
+  double merch_long = 8;   // longitud del comercio
+  int32 hour = 9;          // hora del día (0-23)
+  int32 age = 10;          // edad del titular
+}
+
+// Lote de transacciones (para el streaming).
+message TransactionBatch {
+  repeated Transaction items = 1;
+}
+
+// Salida del modelo.
+message Prediction {
+  bool is_fraud = 1;
+  double probability = 2;
+  string model_version = 3;
+}
+
+service MLService {
+  // unary: 1 transacción -> 1 predicción
+  rpc Predict(Transaction) returns (Prediction);
+  // server streaming: 1 lote -> N predicciones
+  rpc PredictStream(TransactionBatch) returns (stream Prediction);
+}

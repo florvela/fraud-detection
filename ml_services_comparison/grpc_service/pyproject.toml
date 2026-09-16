@@ -1,0 +1,17 @@
+[tool.poetry]
+# package-mode = false: es un proyecto sólo de dependencias (no se instala como paquete).
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+grpcio = "^1.83.1"
+grpcio-tools = "^1.83.1"
+scikit-learn = "^1.9.0"
+xgboost = "^3.4.1"
+numpy = "^2.5.2"
+pandas = "^3.0.5"
+joblib = "^1.6.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

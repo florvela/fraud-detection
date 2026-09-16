@@ -1,0 +1,36 @@
+services:
+  grpc_service:
+    build:
+      context: ./grpc_service
+    # host 50052 -> contenedor 50051 (el 50051 del host lo usa Multipass)
+    ports:
+      - "50052:50051"
+
+  graphql_service:
+    build:
+      context: ./graphql_service
+    ports:
+      - "8000:8000"
+
+  rest_service:
+    build:
+      context: ./rest_service
+    ports:
+      - "8001:8001"
+
+  # El cliente no arranca con `up`; se corre a demanda:
+  #   docker compose run --rm client
+  # Dentro de la red de Docker se conecta por NOMBRE de servicio (no localhost).
+  client:
+    build:
+      context: ./client
+    depends_on:
+      - grpc_service
+      - graphql_service
+      - rest_service
+    environment:
+      - GRPC_HOST=grpc_service:50051
+      - GRAPHQL_URL=http://graphql_service:8000/graphql
+      - REST_URL=http://rest_service:8001/predict
+    profiles:
+      - client

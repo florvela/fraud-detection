@@ -1,0 +1,51 @@
+syntax = "proto3";
+package fraud;
+
+// Contrato tipado del servicio de scoring de fraude por gRPC.
+// Los nombres de los campos coinciden con las features que espera el modelo.
+
+// Entrada: una transacción (mismos campos que el Transaction de la API REST).
+message Transaction {
+  double amt = 1;          // monto de la transacción
+  string category = 2;     // rubro del comercio
+  string gender = 3;       // género del titular (F/M)
+  int32 city_pop = 4;      // población de la ciudad
+  double lat = 5;          // latitud del titular
+  double long = 6;         // longitud del titular
+  double merch_lat = 7;    // latitud del comercio
+  double merch_long = 8;   // longitud del comercio
+  int32 hour = 9;          // hora del día (0-23)
+  int32 age = 10;          // edad del titular
+}
+
+// Entrada para el streaming: un lote de transacciones.
+message TransactionBatch {
+  repeated Transaction items = 1;
+}
+
+// Salida: la predicción del modelo.
+message Prediction {
+  bool is_fraud = 1;         // true si el modelo predice fraude
+  double probability = 2;    // probabilidad estimada de fraude (0 a 1)
+  string model_version = 3;  // versión del modelo que respondió
+}
+
+// Mensaje vacío para el pedido de metadatos.
+message Empty {}
+
+// Metadatos del modelo (misma "vista" que expone REST /v1/model-info y GraphQL).
+message ModelInfo {
+  string name = 1;
+  string version = 2;
+}
+
+service FraudScoring {
+  // unary: 1 transacción -> 1 predicción
+  rpc Predict(Transaction) returns (Prediction);
+
+  // server streaming: 1 lote -> N predicciones (una por transacción del lote)
+  rpc PredictStream(TransactionBatch) returns (stream Prediction);
+
+  // unary: pedir sólo name + version (para comparar con REST y GraphQL)
+  rpc GetModelInfo(Empty) returns (ModelInfo);
+}

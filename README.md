@@ -122,6 +122,97 @@ Reproducilo:
 
 
 
+## gRPC (scoring de fraude)
+
+El mismo modelo también se sirve por **gRPC** (contrato tipado en
+`fraud/api/proto/fraud.proto`). Tiene tres métodos: `Predict` (unary, 1
+transacción → 1 predicción), `PredictStream` (server-streaming, puntúa un lote)
+y `GetModelInfo`. El servidor corre en el puerto **50052** (el 50051 suele estar
+ocupado por Multipass).
+
+```bash
+# Terminal 1: servidor gRPC
+./.venv/bin/python -m fraud.api.grpc_server
+
+# Terminal 2: cliente de prueba (unary + streaming + metadata)
+./.venv/bin/python client_grpc.py
+```
+
+Si cambiás el `.proto`, hay que regenerar los stubs (no se editan a mano):
+
+```bash
+./.venv/bin/python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. fraud/api/proto/fraud.proto
+```
+
+### Comparación de latencia: REST vs GraphQL vs gRPC
+
+Con la API REST/GraphQL (`uvicorn ... --port 8080`) **y** el servidor gRPC
+corriendo, este script manda la misma predicción N veces por cada protocolo y
+mide el tiempo medio:
+
+```bash
+./.venv/bin/python compare_protocols.py
+```
+
+### Clientes de prueba (resumen)
+
+Con la API corriendo (`./.venv/bin/uvicorn fraud.api.main:app --port 8080`) y,
+para gRPC, el servidor de arriba:
+
+| Comando | Qué prueba | Qué devuelve |
+| --- | --- | --- |
+| `python client.py` | REST: caso válido, inválido y token equivocado | `200` válido · `422` datos inválidos · **`403` unauthorized** (token ausente/incorrecto) |
+| `python client_graphql.py` | GraphQL: query mínima vs completa | metadata del modelo (muestra el *over-fetching* de REST) |
+| `python client_grpc.py` | gRPC: unary + streaming + metadata | la predicción tipada del modelo |
+| `python compare_rest_graphql.py` | REST vs GraphQL | llamadas + bytes (over-fetching) |
+| `python compare_protocols.py` | REST vs GraphQL vs gRPC | latencia media por llamada |
+
+### La arquitectura de microservicios (Docker)
+
+En `ml_services_comparison/` está la versión "productiva": **cada protocolo en su
+propio contenedor** (más un contenedor cliente que los compara), orquestados con
+Docker Compose. Todos sirven el mismo `models/model.joblib`.
+
+```bash
+cd ml_services_comparison
+
+docker compose up --build -d      # construye y levanta gRPC, GraphQL y REST
+docker compose ps                 # verifica que los 3 estén arriba
+docker compose run --rm client    # corre la comparación de latencia
+docker compose down               # apaga y limpia todo
+```
+
+Puertos publicados: gRPC en `50052`, GraphQL en `8000`, REST en `8001`.
+Detalles y desvíos respecto del enunciado (Python 3.12, sin volúmenes) en
+`ml_services_comparison/README.md`.
+
+### Reflexión: ¿gRPC o REST? (en criollo)
+
+Corrimos la misma predicción por los tres caminos y gRPC salió el más rápido,
+seguido de REST, y GraphQL último. Pero ojo: **la diferencia local fue chica**.
+¿Por qué? Porque acá el que se lleva casi todo el tiempo es el `predict` del
+modelo (XGBoost), no el "viaje" de los datos. Entonces cambiar el transporte casi
+no se nota.
+
+La gracia de gRPC se ve cuando el tráfico es **mucho y entre servicios internos**:
+manda los datos en **binario** (no texto como REST/GraphQL), usa **HTTP/2** y
+**reutiliza la conexión**, así que paga menos "peaje" por llamada. Cuando hacés
+miles de llamadas por segundo entre microservicios, esos ahorritos se suman y se
+notan un montón. Además el `.proto` es un **contrato estricto**: cliente y
+servidor no se pueden desincronizar sin que salte el error.
+
+¿El costo? Es menos cómodo: el navegador no habla gRPC directo, hay que generar
+código desde el `.proto`, y para debuggear no te sirve un `curl` cualquiera. Por
+eso, para el **borde externo** (una web, un tercero que consume tu API) REST y
+GraphQL siguen ganando en simplicidad.
+
+### Conclusión / decisión del proyecto
+
+Como el resto del proyecto es **comunicación interna entre servicios de ML**
+(donde importan la latencia baja y un contrato firme), **de acá en adelante
+seguimos con una API en gRPC** como transporte principal. REST/GraphQL quedan
+como puerta de entrada opcional para clientes externos.
+
 ## Linaje con Neo4j
 
 Trazabilidad del modelo como grafo (**dato - feature - modelo**), consultable como un campo `lineage` en GraphQL.

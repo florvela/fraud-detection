@@ -1,0 +1,41 @@
+# Configuración de Prometheus para el monitoreo operativo del servicio de fraude.
+# Scrapea los endpoints /metrics de los servicios de serving cada 15s.
+#
+# PUNTO DE INTEGRACIÓN (responsabilidad de los servicios de serving, NO de este
+# servicio de monitoreo): cada target debe exponer métricas en /metrics.
+#   - REST (FastAPI): usar `prometheus-fastapi-instrumentator` -> expone /metrics
+#     en el puerto 8080 con histogramas de latencia y contadores de requests.
+#   - gRPC: no expone HTTP nativamente; se asume un exporter/sidecar que publica
+#     métricas Prometheus en el puerto 9100 (p.ej. py-grpc-prometheus + un
+#     http server, o un exporter dedicado).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: fraud-detection
+    stack: monitoring
+
+scrape_configs:
+  # El propio Prometheus (auto-scrape, útil para verificar que está vivo).
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Servicio de serving REST (FastAPI + prometheus-fastapi-instrumentator).
+  - job_name: fraud-rest
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rest:8080"]
+        labels:
+          service: rest
+          protocol: http
+
+  # Exporter de métricas del servicio gRPC.
+  - job_name: fraud-grpc
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["grpc:9100"]
+        labels:
+          service: grpc
+          protocol: grpc

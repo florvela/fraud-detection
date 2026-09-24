@@ -1,0 +1,8 @@
+# Dependencias del servicio de monitoreo / drift.
+# Evidently 0.4.x: API "clásica" con Report + metric presets (ver README).
+evidently==0.4.40
+pandas
+numpy
+pyarrow
+loguru
+typer

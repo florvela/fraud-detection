@@ -1,0 +1,16 @@
+# Provisioning de dashboards para Grafana.
+# Le indica a Grafana que cargue los JSON de /var/lib/grafana/dashboards
+# (donde se monta la carpeta grafana/dashboards de este servicio).
+apiVersion: 1
+
+providers:
+  - name: fraud-dashboards
+    orgId: 1
+    folder: "Fraud Detection"
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

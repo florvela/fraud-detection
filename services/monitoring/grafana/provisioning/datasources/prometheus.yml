@@ -1,0 +1,15 @@
+# Provisioning del datasource Prometheus para Grafana.
+# Grafana lo carga automáticamente al arrancar (montado en
+# /etc/grafana/provisioning/datasources).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Nombre del servicio Prometheus dentro de la red de docker-compose.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s

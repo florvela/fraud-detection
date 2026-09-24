@@ -82,6 +82,47 @@ curl -X POST http://localhost:8080/v1/predict \
 
 Respuestas: `200` válido · `422` datos inválidos · `403` token ausente/incorrecto.
 
+## Sistema integrador con Docker (TP final)
+
+Todo el sistema se levanta con **Docker Compose**.
+
+**Un solo comando levanta casi todo:**
+
+```bash
+docker compose up -d --build
+```
+
+Levanta **PostgreSQL + MinIO + MLflow + Airflow** (orquestación y ciclo de vida de
+modelos, requisito del rubro), el **núcleo gRPC**, el **borde REST**, **Neo4j**
+(linaje), la **UI Streamlit**, la capa de **streaming** (Redpanda + producer/consumer,
+Mini-TP 4) y el **monitoreo operativo** (Prometheus + Grafana). Airflow ejecuta el DAG
+`fraud_pipeline` (ingesta → features → train → **registro del champion en MLflow**) y
+lo dispara una vez al iniciar (**seed de arranque en frío**). El gRPC carga el champion
+**desde el registry** (con fallback al `.joblib` local).
+
+**Quedan opt-in solo dos capas** — porque dependen de datos que Airflow genera en
+runtime, y arrancarlas antes de que el pipeline termine daría *crash-loop*:
+
+```bash
+# Federado (necesita los silos): primero generalos, luego levantalo
+./.venv/bin/python services/federated/data_partition.py
+docker compose --profile federated up -d           # Flower + MLP (bancos A/B, silos no-IID)
+
+# Reporte de drift Evidently (necesita data/processed, o sea correr después del DAG)
+docker compose --profile monitoring up -d
+
+# Todo junto (incluye las dos anteriores)
+docker compose --profile full up -d --build
+```
+
+**Puertos:** REST `8080` · gRPC `50052` · Airflow `8081` (admin/admin) · MLflow `5001`
+· MinIO `9000`/consola `9001` (minioadmin) · Neo4j `7474`/`7687` · Streamlit `8501`
+· Grafana `3000` · Prometheus `9090`.
+
+Cada servicio adicional tiene su README con detalle: [`services/streaming`](services/streaming/README.md),
+[`services/federated`](services/federated/README.md), [`services/monitoring`](services/monitoring/README.md),
+[`services/ui`](services/ui/README.md).
+
 ## GraphQL (metadatos del modelo)
 
 La misma API expone los metadatos del modelo por GraphQL en `/graphql` (con

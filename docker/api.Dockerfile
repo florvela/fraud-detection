@@ -1,31 +1,32 @@
-# Imagen de serving: solo sirve el modelo, no lo entrena
+# Imagen de serving REST (borde). Delega el scoring en el núcleo gRPC y carga los
+# metadatos del modelo del registry de MLflow (no hornea el .joblib en la imagen).
 # Se construye desde la raíz del proyecto:
-#   docker build -f docker/api.Dockerfile -t fraud-api .
-#   docker run -p 8080:8080 fraud-api
-#   docker run -p 8080:8080 -e API_KEYS="mi-token" fraud-api
-
-# numpy/pandas requieren Python >= 3.12
+#   docker build -f docker/api.Dockerfile -t fraud-rest .
 FROM python:3.12-slim
 
-# uv (gestor rápido): copiamos su binario desde la imagen oficial, sin instalarlo
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# PYTHONPATH=/app hace importable el paquete 'fraud' sin instalarlo
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
 WORKDIR /app
 
-# Solo las dependencias de serving (no jupyter/datasets/matplotlib de dev/train)
+# Dependencias de serving REST + cliente gRPC (para delegar) + MLflow (registry)
 RUN uv pip install --system --no-cache \
     fastapi "uvicorn[standard]" pydantic \
+    grpcio grpcio-tools \
     scikit-learn xgboost pandas numpy joblib \
-    loguru python-dotenv
+    "mlflow==2.16.2" boto3 \
+    strawberry-graphql neo4j \
+    prometheus-fastapi-instrumentator \
+    loguru python-dotenv requests
 
-# Código de la API + modelo ya entrenado
+# Código de la API (el modelo llega por registry/volumen, no se copia)
 COPY fraud/ ./fraud/
-COPY models/model.joblib ./models/model.joblib
+
+# Regenera los stubs de protobuf con el runtime de ESTA imagen (evita mismatch de versiones)
+RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. fraud/api/proto/fraud.proto
 
 EXPOSE 8080
 

@@ -192,3 +192,9 @@ cython_debug/
 
 transcripciones/
 proposed-architecture/
+
+# Runtime del stack docker (artefactos generados al correr, regenerables)
+airflow/logs/
+services/federated/data/
+services/federated/models/
+services/monitoring/reports/

@@ -1,0 +1,357 @@
+# =============================================================================
+# TP final MLOps II — Detección de fraude. Stack integrador (nivel contenedores).
+#
+#   docker compose up -d --build
+#
+# Columna vertebral (requisito del rubro): PostgreSQL + MinIO + MLflow + Airflow.
+# Serving: gRPC (núcleo) + REST (borde). UI: Streamlit del analista.
+# Las capas adicionales (streaming, federado, monitoreo, linaje) se agregan desde
+# services/*/ — ver el README de cada una para su fragmento.
+# =============================================================================
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow.Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # El pipeline arranca despausado -> el scheduler lo corre una vez al iniciar (seed en frío)
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    PYTHONPATH: /opt/airflow/repo
+    # MLflow + MinIO (para el paso de registro del modelo)
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    MLFLOW_MODEL_NAME: fraud-detection
+    MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - .:/opt/airflow/repo
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks: [fraudnet]
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL: metadatos de Airflow y backend store de MLflow
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: airflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # MinIO: Data Lake (S3) + artifact store de MLflow
+  # --------------------------------------------------------------------------
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # consola web
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [fraudnet]
+
+  # Crea los buckets necesarios una vez que MinIO está arriba
+  createbuckets:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb -p local/mlflow;
+      mc mb -p local/data-lake;
+      exit 0;
+      "
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # MLflow: tracking + Model Registry
+  # --------------------------------------------------------------------------
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow.Dockerfile
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri postgresql://postgres:postgres@postgres:5432/mlflow
+      --default-artifact-root s3://mlflow/
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+    ports:
+      - "5001:5000"   # host 5001 (en macOS el 5000 lo usa AirPlay Receiver)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # Airflow: init (migra DB, crea admin, siembra el primer champion) + web + scheduler
+  # --------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create --username admin --password admin \
+          --firstname admin --lastname admin --role Admin --email admin@example.com || true
+        # Seed de arranque en frío: despausar y disparar el pipeline una vez
+        airflow dags unpause fraud_pipeline || true
+        airflow dags trigger fraud_pipeline || true
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8081:8080"   # UI de Airflow
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [fraudnet]
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # Núcleo de scoring gRPC (carga el champion del registry de MLflow)
+  # --------------------------------------------------------------------------
+  grpc:
+    build:
+      context: .
+      dockerfile: docker/grpc.Dockerfile
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_MODEL_NAME: fraud-detection
+      MLFLOW_MODEL_ALIAS: champion
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./models:/app/models   # fallback local si el registry aún no tiene champion
+    depends_on:
+      mlflow:
+        condition: service_started
+    restart: unless-stopped
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # Borde REST (delega el scoring en gRPC; metadatos desde MLflow)
+  # --------------------------------------------------------------------------
+  rest:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      GRPC_HOST: grpc
+      GRPC_PORT: "50052"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_MODEL_NAME: fraud-detection
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      API_KEYS: token-secreto-123
+      # Linaje (GraphQL sobre Neo4j)
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: testpass
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/app/models   # fallback local
+    depends_on:
+      grpc:
+        condition: service_started
+    restart: unless-stopped
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # Neo4j: grafo de linaje (dato -> feature -> modelo -> deploy), consultado por GraphQL
+  # --------------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5
+    environment:
+      NEO4J_AUTH: neo4j/testpass
+    ports:
+      - "7474:7474"   # navegador Neo4j
+      - "7687:7687"   # bolt
+    volumes:
+      - neo4jdata:/data
+    networks: [fraudnet]
+
+  # --------------------------------------------------------------------------
+  # UI del analista (Streamlit)
+  # --------------------------------------------------------------------------
+  ui:
+    build:
+      context: ./services/ui
+    environment:
+      REST_URL: http://rest:8080
+      API_KEY: token-secreto-123
+    ports:
+      - "8501:8501"
+    depends_on:
+      - rest
+    restart: unless-stopped
+    networks: [fraudnet]
+
+  # ==========================================================================
+  # `docker compose up` levanta: core + streaming + Prometheus/Grafana.
+  # Quedan OPT-IN (dependen de datos que genera Airflow en runtime):
+  #   - federado:  docker compose --profile federated up -d   (necesita silos)
+  #   - Evidently: docker compose --profile monitoring up -d  (necesita data/processed)
+  #   - todo:      docker compose --profile full up -d --build
+  # ==========================================================================
+
+  # --- Streaming (Mini-TP 4): Kafka/Redpanda + producer + consumer ----------
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+    networks: [fraudnet]
+
+  stream-consumer:
+    build: ./services/streaming
+    command: ["python", "consumer.py", "--source", "kafka", "--bootstrap-servers", "redpanda:9092", "--window", "100"]
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data
+    depends_on: [redpanda]
+    restart: on-failure
+    networks: [fraudnet]
+
+  stream-producer:
+    build: ./services/streaming
+    command: ["python", "producer.py", "--source", "kafka", "--bootstrap-servers", "redpanda:9092", "--total", "1000", "--rate", "200", "--drift-at", "0.5"]
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data
+    depends_on: [redpanda]
+    networks: [fraudnet]
+
+  # --- Aprendizaje Federado (Flower + MLP): servidor + 2 bancos -------------
+  # NOTA: correr antes `python services/federated/data_partition.py` para generar
+  # los silos data/banco_a.parquet y banco_b.parquet (o ya vienen generados).
+  fed-server:
+    build: ./services/federated
+    profiles: ["full", "federated"]
+    command: ["python", "server.py"]
+    environment:
+      FED_SERVER: "0.0.0.0:8080"
+      FED_ROUNDS: "5"
+    networks: [fraudnet]
+
+  fed-client-a:
+    build: ./services/federated
+    profiles: ["full", "federated"]
+    command: ["python", "client.py"]
+    environment:
+      FED_SERVER: "fed-server:8080"
+      FED_SILO: "/app/data/banco_a.parquet"
+    volumes:
+      - ./services/federated/data:/app/data:ro
+    depends_on: [fed-server]
+    networks: [fraudnet]
+
+  fed-client-b:
+    build: ./services/federated
+    profiles: ["full", "federated"]
+    command: ["python", "client.py"]
+    environment:
+      FED_SERVER: "fed-server:8080"
+      FED_SILO: "/app/data/banco_b.parquet"
+    volumes:
+      - ./services/federated/data:/app/data:ro
+    depends_on: [fed-server]
+    networks: [fraudnet]
+
+  # --- Monitoreo: Prometheus + Grafana + Evidently (drift) ------------------
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./services/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks: [fraudnet]
+
+  grafana:
+    image: grafana/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./services/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./services/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus]
+    networks: [fraudnet]
+
+  evidently:
+    build: ./services/monitoring
+    profiles: ["full", "monitoring"]
+    command: ["run", "--reference", "/data/processed/train.parquet", "--current", "/data/processed/test.parquet", "--output", "/app/reports/drift_report.html", "--inject-shift"]
+    volumes:
+      - ./data:/data:ro
+      - ./services/monitoring/reports:/app/reports
+    networks: [fraudnet]
+
+volumes:
+  pgdata:
+  miniodata:
+  neo4jdata:
+
+networks:
+  fraudnet:
+    driver: bridge

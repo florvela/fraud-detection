@@ -1,0 +1,4 @@
+transaction_id,amt,category,gender,city_pop,lat,long,merch_lat,merch_long,hour,age,probability
+tx-1001,980.50,shopping_net,M,12000,40.71,-74.00,34.05,-118.24,3,27,0.91
+tx-1002,1250.00,misc_net,F,5000,41.88,-87.63,25.76,-80.19,2,44,0.87
+tx-1003,45.20,grocery_pos,F,800000,34.05,-118.24,34.06,-118.25,14,61,0.62

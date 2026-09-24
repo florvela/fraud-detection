@@ -1,0 +1,5 @@
+# venv descartable de pruebas
+.venv/
+__pycache__/
+# salidas de la cola local (modo sim)
+data/

@@ -1,0 +1,14 @@
+# Dependencias del servicio de streaming (Mini-TP 4) - Python 3.11.
+# Broker: kafka-python (cliente puro Python, sin librerías nativas).
+# NOTA: models/model.joblib fue entrenado con sklearn 1.9 / xgboost 3.4 sobre
+# Python 3.12. Acá fijamos las versiones más nuevas compatibles con 3.11
+# (xgboost 3.2, numpy 2.4). El pipeline deserializa y predice sin problemas.
+kafka-python==2.0.2
+typer==0.27.2
+loguru==0.7.3
+numpy==2.4.6
+pandas==2.3.3
+pyarrow==25.0.1
+scikit-learn==1.9.1
+xgboost==3.2.0
+joblib==1.6.0

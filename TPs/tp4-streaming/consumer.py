@@ -12,8 +12,8 @@ Modos (`--source`):
              escribe los puntuados/alertas a archivos locales equivalentes.
 
 Ejemplos:
-    ./.venv/bin/python services/streaming/consumer.py --source sim --window 100
-    ./.venv/bin/python services/streaming/consumer.py --source kafka \\
+    ./.venv/bin/python TPs/tp4-streaming/consumer.py --source sim --window 100
+    ./.venv/bin/python TPs/tp4-streaming/consumer.py --source kafka \\
         --bootstrap-servers localhost:9092
 """
 

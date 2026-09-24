@@ -10,8 +10,8 @@ Toma los eventos de la cola local que dejó el producer (`--source sim`). Si la
 cola está vacía, reconstruye el mismo conjunto con `build_event_pool` + drift.
 
 Ejemplos:
-    ./.venv/bin/python services/streaming/batch_compare.py
-    ./.venv/bin/python services/streaming/batch_compare.py --total 400 --drift-at 0.5
+    ./.venv/bin/python TPs/tp4-streaming/batch_compare.py
+    ./.venv/bin/python TPs/tp4-streaming/batch_compare.py --total 400 --drift-at 0.5
 """
 
 from __future__ import annotations

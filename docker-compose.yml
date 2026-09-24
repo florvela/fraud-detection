@@ -5,8 +5,16 @@
 #
 # Columna vertebral (requisito del rubro): PostgreSQL + MinIO + MLflow + Airflow.
 # Serving: gRPC (núcleo) + REST (borde). UI: Streamlit del analista.
-# Las capas adicionales (streaming, federado, monitoreo, linaje) se agregan desde
-# services/*/ — ver el README de cada una para su fragmento.
+# Las capas adicionales (federado, monitoreo) se agregan desde services/*/ — ver el
+# README de cada una para su fragmento.
+#
+# Streaming (Mini-TP 4) y GraphQL+Neo4j (linaje) salieron de este stack de
+# producción: viven como TPs standalone en TPs/tp4-streaming/ y
+# TPs/tp1-3-protocolos/ respectivamente (ver TPs/README.md). El `rest` acá
+# todavía expone la ruta /graphql para metadatos del modelo (fraud/api), pero
+# el campo `lineage` que dependía de Neo4j queda sin backend en este compose
+# (follow-up pendiente: desactivar esa ruta en fraud/api si se quiere sacar
+# GraphQL del todo del sistema integrado).
 # =============================================================================
 
 x-airflow-common: &airflow-common
@@ -194,10 +202,6 @@ services:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       API_KEYS: token-secreto-123
-      # Linaje (GraphQL sobre Neo4j)
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: testpass
     ports:
       - "8080:8080"
     volumes:
@@ -206,20 +210,6 @@ services:
       grpc:
         condition: service_started
     restart: unless-stopped
-    networks: [fraudnet]
-
-  # --------------------------------------------------------------------------
-  # Neo4j: grafo de linaje (dato -> feature -> modelo -> deploy), consultado por GraphQL
-  # --------------------------------------------------------------------------
-  neo4j:
-    image: neo4j:5
-    environment:
-      NEO4J_AUTH: neo4j/testpass
-    ports:
-      - "7474:7474"   # navegador Neo4j
-      - "7687:7687"   # bolt
-    volumes:
-      - neo4jdata:/data
     networks: [fraudnet]
 
   # --------------------------------------------------------------------------
@@ -239,46 +229,15 @@ services:
     networks: [fraudnet]
 
   # ==========================================================================
-  # `docker compose up` levanta: core + streaming + Prometheus/Grafana.
+  # `docker compose up` levanta: core + Prometheus/Grafana.
   # Quedan OPT-IN (dependen de datos que genera Airflow en runtime):
   #   - federado:  docker compose --profile federated up -d   (necesita silos)
   #   - Evidently: docker compose --profile monitoring up -d  (necesita data/processed)
   #   - todo:      docker compose --profile full up -d --build
+  #
+  # Streaming (Mini-TP 4) ya no vive acá: es un compose autocontenido en
+  # TPs/tp4-streaming/docker-compose.yml (Redpanda + producer + consumer).
   # ==========================================================================
-
-  # --- Streaming (Mini-TP 4): Kafka/Redpanda + producer + consumer ----------
-  redpanda:
-    image: redpandadata/redpanda:latest
-    command:
-      - redpanda
-      - start
-      - --overprovisioned
-      - --smp=1
-      - --check=false
-      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
-    ports:
-      - "9092:9092"
-    networks: [fraudnet]
-
-  stream-consumer:
-    build: ./services/streaming
-    command: ["python", "consumer.py", "--source", "kafka", "--bootstrap-servers", "redpanda:9092", "--window", "100"]
-    volumes:
-      - ./models:/app/models:ro
-      - ./data:/app/data
-    depends_on: [redpanda]
-    restart: on-failure
-    networks: [fraudnet]
-
-  stream-producer:
-    build: ./services/streaming
-    command: ["python", "producer.py", "--source", "kafka", "--bootstrap-servers", "redpanda:9092", "--total", "1000", "--rate", "200", "--drift-at", "0.5"]
-    volumes:
-      - ./models:/app/models:ro
-      - ./data:/app/data
-    depends_on: [redpanda]
-    networks: [fraudnet]
 
   # --- Aprendizaje Federado (Flower + MLP): servidor + 2 bancos -------------
   # NOTA: correr antes `python services/federated/data_partition.py` para generar
@@ -350,7 +309,6 @@ services:
 volumes:
   pgdata:
   miniodata:
-  neo4jdata:
 
 networks:
   fraudnet:

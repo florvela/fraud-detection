@@ -31,7 +31,7 @@ Requiere `models/model.joblib` real en el repo. Creá un venv descartable **dent
 del servicio** e instalá su `requirements.txt`:
 
 ```bash
-cd services/streaming
+cd TPs/tp4-streaming
 python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
@@ -50,13 +50,21 @@ Salidas del modo `sim`: eventos puntuados en `data/scored.jsonl` y alertas en
 
 ### 2) Modo `kafka` con Redpanda (Docker)
 
-Levantá el broker liviano Redpanda y los servicios (ver bloque de compose abajo):
+Este TP es **autocontenido**: tiene su propio `docker-compose.yml` (ya no
+depende del compose raíz del repo).
 
 ```bash
-# desde la raíz del repo (con el fragmento integrado en el docker-compose)
+cd TPs/tp4-streaming
+
+# Levanta Redpanda + consumer + producer (el modelo se monta desde ../../models)
+docker compose up -d --build
+
+# o paso a paso:
 docker compose up -d redpanda
 docker compose up stream-consumer   # queda escuchando 'transactions'
 docker compose run --rm stream-producer  # emite el flujo hacia Kafka
+
+docker compose down                 # limpieza
 ```
 
 O corriendo los scripts contra un broker ya levantado:
@@ -111,48 +119,11 @@ la ventana sospechosa y validar si es drift real o un problema de datos aguas ar
 
 ---
 
-## Bloque para el docker-compose integrador
+## docker-compose.yml de este TP
 
-Pegar dentro del `docker-compose.yml` de la raíz del repo (bajo `services:`).
-El modelo se monta como volumen de solo lectura; **no** se copia dentro de la imagen.
-
-```yaml
-  redpanda:
-    image: redpandadata/redpanda:latest
-    command:
-      - redpanda
-      - start
-      - --overprovisioned
-      - --smp
-      - "1"
-      - --check=false
-    ports:
-      - "9092:9092"
-
-  stream-producer:
-    build: ./services/streaming
-    depends_on:
-      - redpanda
-    volumes:
-      - ./models:/app/models:ro
-      - ./data:/app/data:ro          # opcional: features reales para el flujo
-    environment:
-      - PYTHONUNBUFFERED=1
-    command: >
-      python producer.py --source kafka
-      --bootstrap-servers redpanda:9092
-      --total 1000 --rate 200 --drift-at 0.5
-
-  stream-consumer:
-    build: ./services/streaming
-    depends_on:
-      - redpanda
-    volumes:
-      - ./models:/app/models:ro
-    environment:
-      - PYTHONUNBUFFERED=1
-    command: >
-      python consumer.py --source kafka
-      --bootstrap-servers redpanda:9092
-      --window 100
-```
+Este TP ya **no** se levanta desde el compose raíz del repo (salió de
+producción junto con el resto de los TPs). Vive en
+[`TPs/tp4-streaming/docker-compose.yml`](docker-compose.yml): Redpanda +
+`stream-consumer` + `stream-producer`. El modelo y los datos se montan como
+volumen de solo lectura desde la raíz del repo (`../../models`, `../../data`),
+**no** se copian dentro de la imagen.

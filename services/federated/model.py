@@ -32,7 +32,7 @@ import pandas as pd
 from loguru import logger
 
 # ---------------------------------------------------------------------------
-# Contrato de features (idéntico al del resto del repo, ver services/streaming)
+# Contrato de features (idéntico al del resto del repo, ver TPs/tp4-streaming)
 # ---------------------------------------------------------------------------
 NUMERIC_FEATURES = ["amt", "city_pop", "lat", "long", "merch_lat", "merch_long", "hour", "age"]
 CATEGORICAL_FEATURES = ["category", "gender"]

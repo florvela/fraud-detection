@@ -1,0 +1,47 @@
+# =============================================================================
+# TP4 — Streaming (standalone). Antes vivía como fragmento del docker-compose
+# raíz del repo (services/streaming/); ahora es autocontenido.
+#
+#   cd TPs/tp4-streaming
+#   docker compose up -d --build
+#
+# Levanta Redpanda (broker Kafka-compatible) + producer + consumer. El modelo
+# y los datos NO se copian a la imagen: se montan como volumen de solo lectura
+# desde la raíz del repo (../../models, ../../data), porque `common.py` calcula
+# PROJECT_ROOT como 2 niveles arriba de sí mismo *dentro del contenedor*
+# (/app/services/streaming/common.py -> /app), y el Dockerfile monta el código
+# en esa misma ruta para preservarlo.
+# =============================================================================
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+
+  stream-consumer:
+    build:
+      context: .
+    command: ["python", "consumer.py", "--source", "kafka", "--bootstrap-servers", "redpanda:9092", "--window", "100"]
+    volumes:
+      - ../../models:/app/models:ro
+      - ../../data:/app/data
+    depends_on: [redpanda]
+    restart: on-failure
+
+  stream-producer:
+    build:
+      context: .
+    command: ["python", "producer.py", "--source", "kafka", "--bootstrap-servers", "redpanda:9092", "--total", "1000", "--rate", "200", "--drift-at", "0.5"]
+    volumes:
+      - ../../models:/app/models:ro
+      - ../../data:/app/data
+    depends_on: [redpanda]

@@ -70,7 +70,7 @@ data: requirements
 ## Comparar REST vs GraphQL vs gRPC (latencia + bytes). Requiere el stack levantado (docker compose up)
 .PHONY: compare
 compare:
-	LOGURU_LEVEL=WARNING ./.venv/bin/python compare_protocols.py
+	LOGURU_LEVEL=WARNING ./.venv/bin/python TPs/tp1-3-protocolos/compare_protocols.py
 
 
 #################################################################################

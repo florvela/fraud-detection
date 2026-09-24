@@ -4,7 +4,7 @@
 
 PROJECT_NAME = fraud-detection
 PYTHON_VERSION = 3.12
-PYTHON_INTERPRETER = python
+PYTHON_INTERPRETER = python3
 
 #################################################################################
 # COMMANDS                                                                      #
@@ -44,7 +44,7 @@ format:
 ## Run tests
 .PHONY: test
 test:
-	python -m pytest tests
+	$(PYTHON_INTERPRETER) -m pytest tests
 
 
 ## Set up Python interpreter environment
@@ -65,6 +65,12 @@ create_environment:
 .PHONY: data
 data: requirements
 	$(PYTHON_INTERPRETER) fraud/dataset.py
+
+
+## Comparar REST vs GraphQL vs gRPC (latencia + bytes). Requiere el stack levantado (docker compose up)
+.PHONY: compare
+compare:
+	LOGURU_LEVEL=WARNING ./.venv/bin/python compare_protocols.py
 
 
 #################################################################################

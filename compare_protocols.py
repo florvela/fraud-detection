@@ -1,4 +1,4 @@
-"""Compara la latencia de predecir la MISMA transacción por REST, GraphQL y gRPC.
+"""Compara latencia Y tamaño de payload al predecir la MISMA transacción por REST, GraphQL y gRPC.
 
 Antes de correr, levanta los servidores:
     # REST + GraphQL (misma app FastAPI)
@@ -12,8 +12,12 @@ import time
 import grpc
 import requests
 
-from fraud.api.grpc_server import GRPC_PORT
 from fraud.api.proto import fraud_pb2, fraud_pb2_grpc
+
+# Puerto publicado del núcleo gRPC. Lo definimos como constante (en vez de importarlo
+# de grpc_server) para que este cliente NO cargue el modelo localmente: así evitamos
+# el warning de versión de sklearn al deserializar el .joblib, que acá no hace falta.
+GRPC_PORT = 50052
 
 N = 200  # cantidad de llamadas para promediar
 
@@ -82,10 +86,11 @@ def main() -> None:
 
     try:
         # Una llamada de prueba a cada uno para validar que responden bien.
-        rest_sample = session.post(REST_URL, json=TX_JSON, headers=HEADERS_REST).json()
-        gql_sample = session.post(
-            GRAPHQL_URL, json={"query": GQL_QUERY, "variables": {"tx": TX_GQL}}
-        ).json()["data"]["predict"]
+        # Guardamos la respuesta cruda para medir también el tamaño del payload.
+        rest_resp = session.post(REST_URL, json=TX_JSON, headers=HEADERS_REST)
+        rest_sample = rest_resp.json()
+        gql_resp = session.post(GRAPHQL_URL, json={"query": GQL_QUERY, "variables": {"tx": TX_GQL}})
+        gql_sample = gql_resp.json()["data"]["predict"]
         grpc_sample = stub.Predict(TX_GRPC)
     except (requests.exceptions.ConnectionError, grpc.RpcError):
         print(
@@ -101,15 +106,40 @@ def main() -> None:
     print(f"  GraphQL -> {gql_sample}")
     print(f"  gRPC    -> is_fraud={grpc_sample.is_fraud} probability={grpc_sample.probability}\n")
 
+    # --- Métricas: tamaño de payload y latencia ---
+    # REST/GraphQL devuelven JSON (texto); gRPC un mensaje protobuf (binario).
+    rest_bytes = len(rest_resp.content)
+    gql_bytes = len(gql_resp.content)
+    grpc_bytes = len(grpc_sample.SerializeToString())
+
     rest_ms = time_calls(call_rest)
     gql_ms = time_calls(call_graphql)
     grpc_ms = time_calls(call_grpc)
 
-    print(f"Latencia media sobre {N} llamadas:")
-    print(f"  REST    : {rest_ms:6.3f} ms/llamada")
-    print(f"  GraphQL : {gql_ms:6.3f} ms/llamada")
-    print(f"  gRPC    : {grpc_ms:6.3f} ms/llamada")
-    print(f"\n  gRPC es ~{rest_ms / grpc_ms:.1f}x más rápido que REST en esta prueba local.")
+    filas = [
+        ("REST", "JSON", rest_bytes, rest_ms),
+        ("GraphQL", "JSON", gql_bytes, gql_ms),
+        ("gRPC", "protobuf", grpc_bytes, grpc_ms),
+    ]
+
+    # Tabla ASCII (misma transacción, N llamadas)
+    W = (10, 9, 15, 14)
+    top = "┌" + "┬".join("─" * (w + 2) for w in W) + "┐"
+    mid = "├" + "┼".join("─" * (w + 2) for w in W) + "┤"
+    bot = "└" + "┴".join("─" * (w + 2) for w in W) + "┘"
+
+    print(f"Comparación sobre {N} llamadas (misma transacción):\n")
+    print(top)
+    print(f"│ {'Protocolo':<10} │ {'Formato':<9} │ {'Payload (bytes)':<15} │ {'Latencia (ms)':<14} │")
+    print(mid)
+    for nombre, fmt, b, ms in filas:
+        print(f"│ {nombre:<10} │ {fmt:<9} │ {b:>15} │ {ms:>14.3f} │")
+    print(bot)
+
+    print(
+        f"\n  gRPC vs REST: ~{rest_bytes / grpc_bytes:.1f}x menos bytes "
+        f"y ~{rest_ms / grpc_ms:.1f}x más rápido (en esta prueba local)."
+    )
 
     channel.close()
 

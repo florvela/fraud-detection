@@ -10,11 +10,9 @@
 #
 # Streaming (Mini-TP 4) y GraphQL+Neo4j (linaje) salieron de este stack de
 # producción: viven como TPs standalone en TPs/tp4-streaming/ y
-# TPs/tp1-3-protocolos/ respectivamente (ver TPs/README.md). El `rest` acá
-# todavía expone la ruta /graphql para metadatos del modelo (fraud/api), pero
-# el campo `lineage` que dependía de Neo4j queda sin backend en este compose
-# (follow-up pendiente: desactivar esa ruta en fraud/api si se quiere sacar
-# GraphQL del todo del sistema integrado).
+# TPs/tp1-3-protocolos/ respectivamente (ver TPs/README.md). El core (`fraud/api`)
+# ya NO expone /graphql ni siembra Neo4j: queda sólo el sistema champion/challenger
+# (REST para analista/MLOps + núcleo gRPC).
 # =============================================================================
 
 x-airflow-common: &airflow-common

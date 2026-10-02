@@ -1,6 +1,7 @@
 """Contratos Pydantic de la API: entrada (transaccion) y salida (prediccion)"""
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -42,10 +43,38 @@ class Transaction(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ChallengerScore(BaseModel):
+    """Predicción del challenger en sombra (no decide)."""
+
+    is_fraud: bool
+    probability: float
+    model_version: str
+
+
 class PredictionResponse(BaseModel):
-    is_fraud: bool = Field(..., description="True si el modelo predice fraude")
+    # --- veredicto del champion (campos de siempre; compatibilidad hacia atrás) ---
+    is_fraud: bool = Field(..., description="True si el champion predice fraude")
     probability: float = Field(..., description="Probabilidad estimada de fraude (0 a 1)")
-    model_version: str = Field(..., description="Versión del modelo que respondió")
+    model_version: str = Field(..., description="Versión del champion que respondió")
+    # --- nuevos: decisión + trazabilidad + challenger en sombra ---
+    transaction_id: str | None = Field(
+        None, description="ID con el que se registró la transacción"
+    )
+    decision: str | None = Field(None, description="approve (OK) | review (PENDING)")
+    status: str | None = Field(None, description="Estado de la tx: OK | PENDING")
+    challenger: ChallengerScore | None = Field(
+        None, description="Predicción del challenger en sombra, si hay uno activo"
+    )
+
+
+class DecisionRequest(BaseModel):
+    """Decisión del analista revisor sobre una tx retenida (UC2)."""
+
+    decision: Literal["approve", "reject"] = Field(
+        ..., description="approve = legítima (label 0) · reject = fraude (label 1)"
+    )
+
+    model_config = {"extra": "forbid"}
 
 
 class HealthResponse(BaseModel):

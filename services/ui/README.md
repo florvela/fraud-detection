@@ -1,36 +1,32 @@
 # Interfaz del analista de fraude (Streamlit)
 
-UI web para el analista de fraude del sistema de detección de fraude con tarjeta.
-Es la cara humana del pipeline: consume la **API REST** (FastAPI) para scorear
-transacciones y consultar el modelo, y permite **etiquetar** cada alerta como
-fraude o no, generando los *labels reales* que luego alimentan el reentrenamiento.
+UI web para el analista de fraude. Es la cara humana del sistema champion/challenger:
+consume la **API REST** (FastAPI) para scorear transacciones, resolver la cola de
+revisión (generando los *labels reales* que alimentan el reentrenamiento) y operar
+el ciclo de vida del modelo (evaluar / desplegar challenger).
 
 ## Qué hace
 
-La app (`app.py`) tiene tres vistas, organizadas en pestañas:
+La app (`app.py`) tiene cuatro vistas, organizadas en pestañas:
 
-- **Scoring manual**: formulario con las features de una transacción. Al enviar,
-  hace `POST /v1/predict` a la REST (con el header `X-API-KEY`) y muestra la
-  probabilidad de fraude y el veredicto del modelo.
-- **Bandeja de alertas**: tabla de transacciones sospechosas leídas de
-  `data/alerts.csv` (placeholder). Para cada alerta hay botones
-  **Confirmar fraude** / **Descartar**, que escriben el label en
-  `data/labels.csv` con el formato `transaction_id,label,analyst_ts`
-  (`label`: `1` = fraude, `0` = descartada).
-- **Modelo**: muestra el resultado de `GET /v1/model-info` (nombre, versión y
-  métricas del modelo servido).
+- **Scoring manual**: formulario con las features de una transacción. Hace
+  `POST /v1/predict` (header `X-API-KEY`) y muestra la **decisión del champion**
+  (aprobada / en revisión) y, si hay un **challenger** activo, su predicción en
+  sombra (que no decide).
+- **Cola de revisión** (UC2/UC3): lista las transacciones retenidas con
+  `GET /v1/reviews?status=PENDING`; por cada una, el analista **Aprueba**
+  (legítima → `POST …/decision {approve}`), **Rechaza** (fraude →
+  `{reject}`) o **Denuncia** a posteriori (`POST …/report-fraud`). Cada acción
+  persiste el label real en el store del servidor por `transaction_id`.
+- **MLOps** (UC5/UC6): **Evaluar** challenger vs champion
+  (`POST /v1/mlops/evaluate`) contra la ground truth acumulada, y **Deploy** /
+  **Rollback** (`POST /v1/mlops/deploy?action=promote|rollback`).
+- **Modelo**: muestra `GET /v1/model-info` (nombre, versión y métricas).
 
 La barra lateral hace un chequeo de salud (`GET /health`) y muestra la config
 activa. Si la REST no está disponible, la UI muestra un mensaje claro en vez de
-un stacktrace.
-
-### Nota sobre el sistema real
-
-- Las alertas de `data/alerts.csv` son un **placeholder**. En el sistema real
-  llegarían del topic `fraud-alerts` del broker de streaming.
-- Los labels de `data/labels.csv` son un **placeholder** del *store etiquetado*.
-  En producción, estos veredictos del analista alimentan el store de labels
-  usado para reentrenar el modelo con feedback humano.
+un stacktrace. Ya no usa archivos CSV: todo el estado (transacciones y labels)
+vive en el store del servidor.
 
 ## Variables de entorno
 

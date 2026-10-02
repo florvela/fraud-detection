@@ -1,14 +1,18 @@
-"""Registra el modelo entrenado en MLflow y promueve champion/challenger.
+"""Registra el modelo entrenado en MLflow como champion (bootstrap) o challenger.
 
 Lo llama el DAG de Airflow como paso final del pipeline. Flujo:
 1. Carga `models/model.joblib` (el artefacto que dejó `fraud.modeling.train`).
 2. Abre un run de MLflow y loguea params, métricas y el artefacto joblib.
 3. Registra una nueva versión del modelo `fraud-detection`.
-4. Compara su PR-AUC contra el champion actual (challenger): si es igual o mejor
-   —o si no hay champion todavía— le asigna el alias `champion`.
+4. Asigna el alias según el ciclo de vida del sistema:
+   - **No hay champion todavía** (arranque en frío / seed) → alias `champion`.
+   - **Ya hay champion** → alias `challenger`. NO se auto-promueve: el challenger
+     corre en sombra (UC1), se evalúa contra la ground truth (UC5) y recién el
+     Ingeniero MLOps lo promueve con un deploy explícito (UC6, ver `fraud/api/deploy.py`).
 
-El serving (gRPC/REST) carga el champion por alias, así que promover un mejor
-modelo NO requiere reconstruir ninguna imagen.
+Esto es lo que hace real al esquema champion/challenger: el modelo nuevo entra como
+challenger y la promoción es una decisión informada, no un `>=` automático de PR-AUC.
+El serving carga cada alias por su cuenta, así que nada de esto reconstruye imágenes.
 """
 
 from __future__ import annotations
@@ -23,20 +27,19 @@ from mlflow.tracking import MlflowClient
 from fraud.config import MODELS_DIR
 
 MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "fraud-detection")
-ALIAS = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
+CHAMPION_ALIAS = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
+CHALLENGER_ALIAS = os.getenv("MLFLOW_CHALLENGER_ALIAS", "challenger")
 EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT", "fraud-detection")
 ARTIFACT_DIR = "model_artifact"  # coincide con MLFLOW_ARTIFACT_PATH del serving
 
 
-def _current_champion_pr_auc(client: MlflowClient) -> float | None:
-    """PR-AUC del champion actual (o None si todavía no hay ninguno)."""
+def _has_champion(client: MlflowClient) -> bool:
+    """True si ya hay un modelo con alias champion en el registry."""
     try:
-        mv = client.get_model_version_by_alias(MODEL_NAME, ALIAS)
-    except Exception:
-        return None
-    run = client.get_run(mv.run_id)
-    val = run.data.metrics.get("pr_auc")
-    return float(val) if val is not None else None
+        client.get_model_version_by_alias(MODEL_NAME, CHAMPION_ALIAS)
+        return True
+    except Exception:  # noqa: BLE001 - cualquier fallo = no hay champion todavía
+        return False
 
 
 def main() -> None:
@@ -53,7 +56,7 @@ def main() -> None:
     mlflow.set_experiment(EXPERIMENT)
     client = MlflowClient()
 
-    champ_pr_auc = _current_champion_pr_auc(client)
+    champion_exists = _has_champion(client)
 
     with mlflow.start_run(run_name=f"train-{version}") as run:
         mlflow.log_param("model_version", version)
@@ -67,22 +70,18 @@ def main() -> None:
         mv = mlflow.register_model(model_uri=model_uri, name=MODEL_NAME)
         logger.info(f"Registrada versión {mv.version} de '{MODEL_NAME}' (PR-AUC={pr_auc:.4f})")
 
-    # Champion / challenger
-    if champ_pr_auc is None:
-        promote = True
-        reason = "no había champion previo"
-    elif pr_auc >= champ_pr_auc:
-        promote = True
-        reason = f"PR-AUC {pr_auc:.4f} >= champion {champ_pr_auc:.4f}"
+    # Bootstrap vs retrain: primer modelo = champion; de ahí en más = challenger.
+    if not champion_exists:
+        client.set_registered_model_alias(MODEL_NAME, CHAMPION_ALIAS, mv.version)
+        logger.success(
+            f"Arranque en frío: v{mv.version} queda como '{CHAMPION_ALIAS}' (no había champion)."
+        )
     else:
-        promote = False
-        reason = f"PR-AUC {pr_auc:.4f} < champion {champ_pr_auc:.4f}"
-
-    if promote:
-        client.set_registered_model_alias(MODEL_NAME, ALIAS, mv.version)
-        logger.success(f"Promovido a '{ALIAS}' v{mv.version} ({reason}).")
-    else:
-        logger.info(f"NO se promueve: {reason}. El champion sigue igual.")
+        client.set_registered_model_alias(MODEL_NAME, CHALLENGER_ALIAS, mv.version)
+        logger.success(
+            f"Registrado v{mv.version} como '{CHALLENGER_ALIAS}'. "
+            "Corré en sombra, evaluá (UC5) y promové con un deploy explícito (UC6)."
+        )
 
 
 if __name__ == "__main__":

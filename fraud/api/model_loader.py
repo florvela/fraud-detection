@@ -32,9 +32,18 @@ MLFLOW_ARTIFACT_PATH = os.getenv("MLFLOW_ARTIFACT_PATH", "model_artifact/model.j
 
 
 class ModelStore:
-    def __init__(self) -> None:
+    """Carga un modelo (champion por defecto; también sirve para el challenger).
+
+    `alias` elige la versión en el registry de MLflow (`champion` / `challenger`) y
+    `local_file` el artefacto local de fallback. Con los defaults se comporta como
+    siempre: el champion desde `models/model.joblib` o el alias `champion`.
+    """
+
+    def __init__(self, alias: str | None = None, local_file=None) -> None:
         self._artifact: dict | None = None
         self._source: str | None = None
+        self._alias = alias or MLFLOW_MODEL_ALIAS
+        self._local_file = local_file or MODEL_FILE
 
     @property
     def loaded(self) -> bool:
@@ -58,15 +67,15 @@ class ModelStore:
             import mlflow
 
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-            model_uri = f"models:/{MLFLOW_MODEL_NAME}@{MLFLOW_MODEL_ALIAS}"
-            logger.info(f"Descargando artefacto del champion desde {model_uri} ...")
+            model_uri = f"models:/{MLFLOW_MODEL_NAME}@{self._alias}"
+            logger.info(f"Descargando artefacto ({self._alias}) desde {model_uri} ...")
             local_path = mlflow.artifacts.download_artifacts(
                 artifact_uri=f"{model_uri}/{MLFLOW_ARTIFACT_PATH}"
             )
             self._artifact = joblib.load(local_path)
             self._source = "registry"
             logger.success(
-                f"Modelo cargado del registry ({MLFLOW_MODEL_NAME}@{MLFLOW_MODEL_ALIAS}, "
+                f"Modelo cargado del registry ({MLFLOW_MODEL_NAME}@{self._alias}, "
                 f"v{self._artifact.get('version')})"
             )
             return True
@@ -75,12 +84,12 @@ class ModelStore:
             return False
 
     def _load_from_file(self) -> bool:
-        if not MODEL_FILE.exists():
-            logger.error(f"No existe el modelo local en {MODEL_FILE}")
+        if not self._local_file.exists():
+            logger.error(f"No existe el modelo local en {self._local_file}")
             return False
-        self._artifact = joblib.load(MODEL_FILE)
+        self._artifact = joblib.load(self._local_file)
         self._source = "local"
-        logger.success(f"Modelo cargado del archivo local {MODEL_FILE}")
+        logger.success(f"Modelo cargado del archivo local {self._local_file}")
         return True
 
     def reload(self) -> bool:
@@ -113,5 +122,20 @@ class ModelStore:
 
     def _require(self) -> dict:
         if self._artifact is None:
-            raise RuntimeError(f"Modelo no cargado, se esperaba {MODEL_FILE} o el registry")
+            raise RuntimeError(f"Modelo no cargado, se esperaba {self._local_file} o el registry")
         return self._artifact
+
+
+# Rutas / alias del challenger (el modelo en sombra)
+CHALLENGER_FILE = MODELS_DIR / "challenger.joblib"
+MLFLOW_CHALLENGER_ALIAS = os.getenv("MLFLOW_CHALLENGER_ALIAS", "challenger")
+
+
+def make_champion() -> ModelStore:
+    """ModelStore del champion (el que decide)."""
+    return ModelStore(alias=MLFLOW_MODEL_ALIAS, local_file=MODEL_FILE)
+
+
+def make_challenger() -> ModelStore:
+    """ModelStore del challenger (en sombra). Puede no existir: load() devuelve False."""
+    return ModelStore(alias=MLFLOW_CHALLENGER_ALIAS, local_file=CHALLENGER_FILE)

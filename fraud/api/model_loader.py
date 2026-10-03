@@ -65,13 +65,20 @@ class ModelStore:
     def _load_from_registry(self) -> bool:
         try:
             import mlflow
+            from mlflow.tracking import MlflowClient
 
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-            model_uri = f"models:/{MLFLOW_MODEL_NAME}@{self._alias}"
-            logger.info(f"Descargando artefacto ({self._alias}) desde {model_uri} ...")
-            local_path = mlflow.artifacts.download_artifacts(
-                artifact_uri=f"{model_uri}/{MLFLOW_ARTIFACT_PATH}"
+            # Resolvemos el alias -> versión -> URI de artefactos del run. Bajar por
+            # `models:/name@alias/subpath` no es confiable (MLflow interpreta
+            # `name@alias` como nombre); `mv.source` apunta al dir de artefactos real.
+            client = MlflowClient()
+            mv = client.get_model_version_by_alias(MLFLOW_MODEL_NAME, self._alias)
+            model_file = os.path.basename(MLFLOW_ARTIFACT_PATH)  # p.ej. model.joblib
+            artifact_uri = f"{mv.source}/{model_file}"
+            logger.info(
+                f"Descargando artefacto ({self._alias}, v{mv.version}) desde {artifact_uri} ..."
             )
+            local_path = mlflow.artifacts.download_artifacts(artifact_uri=artifact_uri)
             self._artifact = joblib.load(local_path)
             self._source = "registry"
             logger.success(

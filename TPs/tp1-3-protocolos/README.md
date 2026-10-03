@@ -59,9 +59,12 @@ docker compose up --build -d
 docker compose ps
 
 # 3. Correr el cliente comparador (mide latencia REST vs GraphQL vs gRPC)...
-#    a) dentro de la red de Docker (se conecta por nombre de servicio) — recomendado:
+#    a) dentro de la red de Docker (se conecta por nombre de servicio)
 docker compose run --rm client
-#    b) o desde tu terminal local, con un venv propio del cliente (NO usa nada del repo raíz):
+```
+
+```bash
+#    b) o desde tu terminal local, con un venv propio del cliente
 cd client
 python3 -m venv .venv
 ./.venv/bin/pip install grpcio grpcio-tools requests

@@ -198,3 +198,8 @@ airflow/logs/
 services/federated/data/
 services/federated/models/
 services/monitoring/reports/
+
+# Notas y borradores locales (no versionar)
+*.local.md
+*.local.*
+.notas/

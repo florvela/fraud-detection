@@ -196,6 +196,10 @@ services:
     depends_on:
       mlflow:
         condition: service_started
+      # Espera a que el init termine (incluido el seed del champion con
+      # SEED_BAD_CHAMPION=1) antes de cargar el modelo, para no cargar el alias viejo.
+      airflow-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     networks: [fraudnet]
 

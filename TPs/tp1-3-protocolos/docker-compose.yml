@@ -55,5 +55,7 @@ services:
       - GRPC_HOST=grpc_service:50051
       - GRAPHQL_URL=http://graphql_service:8000/graphql
       - REST_URL=http://rest_service:8001/predict
+      # para los demos (demo_rest.py / demo_graphql.py) dentro de la red:
+      - REST_BASE=http://rest_service:8001
     profiles:
       - client

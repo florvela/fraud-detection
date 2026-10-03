@@ -44,36 +44,33 @@ Códigos:
 
 El token se lee de la env `API_KEYS` (varios separados por coma). Sin definirla se usa el token de desarrollo `token-secreto-123`. Nunca se hardcodea en el código.
 
-## Probar en local
+## Probar (Docker, autocontenido)
+
+El servicio vive en `rest_service/` (su propio `Dockerfile` + `model.joblib`) y
+se publica en el puerto **8001** vía el `docker-compose.yml` del TP:
 
 ```bash
-./.venv/bin/uvicorn fraud.api.main:app --reload --port 8080
+cd TPs/tp1-3-protocolos
+docker compose up --build -d rest_service
 ```
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8001/health
 
-curl -X POST http://localhost:8080/v1/predict \
+curl -X POST http://localhost:8001/v1/predict \
   -H "X-API-KEY: token-secreto-123" -H "Content-Type: application/json" \
   -d '{"amt":950.75,"category":"shopping_net","gender":"F","city_pop":15000,
        "lat":40.1,"long":-74.5,"merch_lat":41.9,"merch_long":-80.2,"hour":2,"age":35}'
+
+# token propio: docker compose up -d con API_KEYS="mi-token" en el environment
 ```
 
-Cliente de ejemplo: `./.venv/bin/python client.py` (casos 200 / 422 / 403)
-
-## Probar en Docker
+Cliente de ejemplo (casos 200 / 422 / 403 + health + model-info):
 
 ```bash
-docker build -f docker/api.Dockerfile -t fraud-api .
-docker run -p 8080:8080 fraud-api
-docker run -p 8080:8080 -e API_KEYS="mi-token" fraud-api   # token propio
+docker compose run --rm client python demo_rest.py
 ```
 
-La imagen solo sirve el modelo: requiere `models/model.joblib` ya generado
-
-## Tests
-
-```bash
-./.venv/bin/python -m pytest tests/test_api.py -v
-```
+> El `/predict` (sin `/v1` ni auth) lo usa el cliente comparador de latencia
+> (`client/client.py`). Swagger UI en **http://localhost:8001/docs**.
 

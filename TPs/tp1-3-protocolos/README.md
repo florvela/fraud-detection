@@ -43,11 +43,15 @@ docker compose up --build -d
 # 2. Ver que están arriba
 docker compose ps
 
-# 3. Correr el cliente comparador...
-#    a) dentro de la red de Docker (se conecta por nombre de servicio):
+# 3. Correr el cliente comparador (mide latencia REST vs GraphQL vs gRPC)...
+#    a) dentro de la red de Docker (se conecta por nombre de servicio) — recomendado:
 docker compose run --rm client
-#    b) o desde tu terminal local (usa el .venv del repo, apunta a los puertos publicados):
-cd client && ../../../.venv/bin/python client.py
+#    b) o desde tu terminal local, con un venv propio del cliente (NO usa nada del repo raíz):
+cd client
+python3 -m venv .venv
+./.venv/bin/pip install grpcio grpcio-tools requests
+./.venv/bin/python -m grpc_tools.protoc -I./proto --python_out=. --grpc_python_out=. ./proto/ml_service.proto
+./.venv/bin/python client.py
 ```
 
 ## Probar a mano
@@ -66,32 +70,14 @@ curl -s localhost:8001/predict -H "Content-Type: application/json" \
 docker compose down
 ```
 
-## Scripts sueltos (`client.py`, `client_grpc.py`, `client_graphql.py`, `compare_protocols.py`, `compare_rest_graphql.py`)
+## Nota: este TP es autocontenido (no depende del repo raíz)
 
-Estos 5 scripts se movieron acá desde la raíz del repo, pero **no** apuntan a
-los contenedores de este TP (`ml_services_comparison`): apuntan al **sistema
-integrado** del compose raíz (`fraud.api` en `localhost:8080` REST/GraphQL y
-`localhost:50052` gRPC). `client_grpc.py` y `compare_protocols.py` además
-importan el paquete `fraud` (`fraud.api.proto`, `fraud.api.grpc_server`).
+Todo lo necesario para correr la comparación vive en esta carpeta: cada servicio
+trae su `model.joblib` y su `Dockerfile`, y el `client/` mide la latencia contra
+los tres contenedores. Con sólo `TPs/tp1-3-protocolos/` alcanza.
 
-Para que el import de `fraud` funcione hay que correrlos con el `.venv` del
-**repo raíz** (el paquete está instalado editable ahí vía `pyproject.toml`),
-no con un venv nuevo en esta carpeta. El CWD no importa para el import (el
-paquete se resuelve desde `site-packages`), así que podés correrlos desde acá:
-
-```bash
-# con el sistema integrado levantado (docker compose up en la raíz del repo)
-# y, para client_grpc.py/compare_protocols.py, el servidor gRPC arriba:
-../../.venv/bin/python client.py
-../../.venv/bin/python client_graphql.py
-../../.venv/bin/python client_grpc.py
-../../.venv/bin/python compare_rest_graphql.py
-../../.venv/bin/python compare_protocols.py
-```
-
-o desde la raíz del repo:
-
-```bash
-./.venv/bin/python TPs/tp1-3-protocolos/client_grpc.py
-./.venv/bin/python TPs/tp1-3-protocolos/compare_protocols.py
-```
+> Los clientes que apuntaban al **sistema integrado de producción** del repo
+> (`fraud.api` en `localhost:8080`/`50052`, con API-key, `/v1/model-info`, etc.)
+> ya **no** viven acá: son parte de prod y se movieron a
+> [`fraud/api/clients/`](../../fraud/api/clients/) en la raíz del repo
+> (`make compare` los usa). Este TP y ese sistema son dos cosas separadas.

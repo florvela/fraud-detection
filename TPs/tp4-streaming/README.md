@@ -1,8 +1,15 @@
 # Servicio de Streaming - Detección de fraude online (Mini-TP 4)
 
-Flujo de transacciones scoreadas en tiempo real contra el modelo XGBoost del
-repo (`models/model.joblib`), con **métricas por ventana**, **detección de drift**
-y **alertas** por umbral. Incluye una comparación **batch vs streaming**.
+Flujo de transacciones scoreadas en tiempo real contra el modelo XGBoost
+(`models/model.joblib`, incluido en esta carpeta), con **métricas por ventana**,
+**detección de drift** y **alertas** por umbral. Incluye una comparación
+**batch vs streaming**.
+
+> **Autocontenido**: este TP no depende del repo raíz. El modelo viaja dentro
+> de la carpeta (`models/model.joblib`) y los eventos se generan **sintéticos**
+> si no hay datos reales, así que con sólo `TPs/tp4-streaming/` alcanza para
+> correrlo. (Opcional: si dejás un parquet en `data/raw/fraud_sample.parquet`,
+> el producer muestrea features reales en vez de sintéticas.)
 
 ## Componentes
 
@@ -27,8 +34,8 @@ El **contrato del modelo**: `pipeline.predict_proba(X)[:,1]` sobre las columnas
 
 ### 1) Modo `sim` (in-memory, sin Docker)
 
-Requiere `models/model.joblib` real en el repo. Creá un venv descartable **dentro
-del servicio** e instalá su `requirements.txt`:
+El modelo ya viene en `models/model.joblib` (dentro de esta carpeta). Creá un
+venv descartable **dentro del servicio** e instalá su `requirements.txt`:
 
 ```bash
 cd TPs/tp4-streaming
@@ -56,7 +63,7 @@ depende del compose raíz del repo).
 ```bash
 cd TPs/tp4-streaming
 
-# Levanta Redpanda + consumer + producer (el modelo se monta desde ../../models)
+# Levanta Redpanda + consumer + producer (el modelo ya viene horneado en la imagen)
 docker compose up -d --build
 
 # o paso a paso:
@@ -124,6 +131,6 @@ la ventana sospechosa y validar si es drift real o un problema de datos aguas ar
 Este TP ya **no** se levanta desde el compose raíz del repo (salió de
 producción junto con el resto de los TPs). Vive en
 [`TPs/tp4-streaming/docker-compose.yml`](docker-compose.yml): Redpanda +
-`stream-consumer` + `stream-producer`. El modelo y los datos se montan como
-volumen de solo lectura desde la raíz del repo (`../../models`, `../../data`),
-**no** se copian dentro de la imagen.
+`stream-consumer` + `stream-producer`. El modelo se **hornea** en la imagen
+desde `models/model.joblib` (ver [`Dockerfile`](Dockerfile)); no se monta ni se
+copia nada desde la raíz del repo.

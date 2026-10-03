@@ -17,13 +17,17 @@ import pandas as pd
 from loguru import logger
 
 # --- Rutas del proyecto ---------------------------------------------------
-# common.py vive en services/streaming/ -> la raíz del repo son 2 niveles arriba.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "model.joblib"
-DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "raw" / "fraud_sample.parquet"
+# Este TP es autocontenido: todo (modelo, datos opcionales, cola local) cuelga
+# de la propia carpeta del TP, nunca de la raíz del repo. HERE es el directorio
+# de este archivo (en local: TPs/tp4-streaming/; en Docker: /app).
+HERE = Path(__file__).resolve().parent
+DEFAULT_MODEL_PATH = HERE / "models" / "model.joblib"
+# Parquet OPCIONAL: si lo dejás en data/raw/ se muestrean features reales; si no
+# está, build_event_pool() cae a eventos sintéticos (ver _load_real_pool()).
+DEFAULT_DATA_PATH = HERE / "data" / "raw" / "fraud_sample.parquet"
 
 # Cola local para el modo `sim` (funciona sin Kafka): un archivo JSON Lines.
-STREAM_DIR = Path(__file__).resolve().parent / "data"
+STREAM_DIR = HERE / "data"
 SIM_QUEUE_PATH = STREAM_DIR / "stream.jsonl"
 SIM_ALERTS_PATH = STREAM_DIR / "alerts.jsonl"
 
@@ -41,7 +45,8 @@ def load_artifact(model_path: str | Path = DEFAULT_MODEL_PATH) -> dict[str, Any]
     if not model_path.exists():
         raise FileNotFoundError(
             f"No se encontró el modelo en {model_path}. "
-            "En Docker el modelo llega por volumen montado en /app/models."
+            "Debe estar en models/model.joblib dentro de este TP (se copia a la "
+            "imagen en el build; en local corré desde TPs/tp4-streaming/)."
         )
     artifact = joblib.load(model_path)
     logger.info(

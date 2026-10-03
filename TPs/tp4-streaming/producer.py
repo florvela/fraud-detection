@@ -9,8 +9,9 @@ Modos (`--source`):
     sim   -> escribe a una cola local (JSON Lines) para probar sin broker.
 
 Ejemplos:
-    ./.venv/bin/python TPs/tp4-streaming/producer.py --source sim --total 400
-    ./.venv/bin/python TPs/tp4-streaming/producer.py --source kafka \\
+    # desde TPs/tp4-streaming/ con el venv local del TP:
+    ./.venv/bin/python producer.py --source sim --total 400
+    ./.venv/bin/python producer.py --source kafka \\
         --bootstrap-servers localhost:9092 --total 1000 --rate 200
 """
 

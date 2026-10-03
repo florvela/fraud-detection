@@ -36,6 +36,9 @@ x-airflow-common: &airflow-common
     MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     AWS_ACCESS_KEY_ID: minioadmin
     AWS_SECRET_ACCESS_KEY: minioadmin
+    # Flag opcional de demo: con SEED_BAD_CHAMPION=1 el init siembra como champion
+    # el modelo malo versionado (models/badmodel.joblib) en vez de disparar el DAG.
+    SEED_BAD_CHAMPION: ${SEED_BAD_CHAMPION:-0}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
@@ -138,9 +141,18 @@ services:
         airflow db migrate
         airflow users create --username admin --password admin \
           --firstname admin --lastname admin --role Admin --email admin@example.com || true
-        # Seed de arranque en frío: despausar y disparar el pipeline una vez
-        airflow dags unpause fraud_pipeline || true
-        airflow dags trigger fraud_pipeline || true
+        if [ "$${SEED_BAD_CHAMPION:-0}" = "1" ]; then
+          # Demo: sembrar un champion a propósito MALO (models/badmodel.joblib) y
+          # dejar el DAG disponible pero SIN disparar (lo corrés vos en cámara para
+          # que nazca el challenger bueno).
+          echo "[init] SEED_BAD_CHAMPION=1 -> sembrando champion malo"
+          python /opt/airflow/repo/airflow/scripts/bootstrap_champion.py
+          airflow dags unpause fraud_pipeline || true
+        else
+          # Arranque normal: despausar y disparar el pipeline una vez (seed en frío).
+          airflow dags unpause fraud_pipeline || true
+          airflow dags trigger fraud_pipeline || true
+        fi
     restart: on-failure
 
   airflow-webserver:

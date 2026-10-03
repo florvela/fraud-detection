@@ -23,6 +23,9 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # Clave fija y compartida (webserver + scheduler): sin esto cada `up` genera
+    # una aleatoria y el login falla con "CSRF tokens do not match". Local/demo.
+    AIRFLOW__WEBSERVER__SECRET_KEY: "fraud-demo-secret-key-local"
     # El pipeline arranca despausado -> el scheduler lo corre una vez al iniciar (seed en frío)
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags

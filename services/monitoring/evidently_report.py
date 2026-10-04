@@ -51,9 +51,12 @@ TARGET = "is_fraud"
 # Si el dataset la incluye, se activa el análisis de prediction drift.
 PREDICTION = "prediction"
 
-# monitoring/ vive en services/monitoring/ -> la raíz del repo son 2 niveles arriba.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent / "reports"
+# Local: monitoring/ vive en services/monitoring/ -> la raíz del repo son 2 niveles
+# arriba. En Docker el script está en /app (no hay 2 niveles): sólo se usa para los
+# defaults de --reference/--current, que en el contenedor se pasan explícitos.
+_HERE = Path(__file__).resolve()
+PROJECT_ROOT = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent
+DEFAULT_REPORTS_DIR = _HERE.parent / "reports"
 
 app = typer.Typer(add_completion=False, help="Reportes de drift con Evidently.")
 

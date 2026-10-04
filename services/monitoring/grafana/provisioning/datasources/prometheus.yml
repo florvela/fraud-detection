@@ -6,6 +6,9 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    # UID fijo: los paneles del dashboard (fraud.json) referencian uid "prometheus".
+    # Sin esto, Grafana genera un uid aleatorio y los paneles muestran "No data".
+    uid: prometheus
     access: proxy
     # Nombre del servicio Prometheus dentro de la red de docker-compose.
     url: http://prometheus:9090

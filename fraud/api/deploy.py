@@ -22,7 +22,9 @@ from loguru import logger
 
 from fraud.api.model_loader import (
     CHALLENGER_FILE,
+    FEDERATED_FILE,
     MLFLOW_CHALLENGER_ALIAS,
+    MLFLOW_FEDERATED_ALIAS,
     MLFLOW_MODEL_ALIAS,
     MLFLOW_MODEL_NAME,
     MODEL_FILE,
@@ -31,16 +33,31 @@ from fraud.config import MODELS_DIR
 
 PREVIOUS_FILE = MODELS_DIR / "previous.joblib"
 
+# Modelos en sombra que se pueden promover a champion (UC6). Cada uno mapea a su
+# alias en el registry de MLflow y a su artefacto local de fallback.
+_SOURCES = {
+    "challenger": (MLFLOW_CHALLENGER_ALIAS, CHALLENGER_FILE),
+    "federated": (MLFLOW_FEDERATED_ALIAS, FEDERATED_FILE),
+}
+
+
+def _resolve_source(source: str) -> tuple[str, object]:
+    try:
+        return _SOURCES[source]
+    except KeyError:
+        raise ValueError(f"source inválido: {source!r} (esperado {sorted(_SOURCES)})")
+
 
 def _mlflow_enabled() -> bool:
     return bool(os.getenv("MLFLOW_TRACKING_URI"))
 
 
-def promote() -> dict:
-    """Promueve el challenger a champion. Devuelve el resultado de la operación."""
+def promote(source: str = "challenger") -> dict:
+    """Promueve a champion el modelo en sombra indicado (challenger | federated)."""
+    alias, local_file = _resolve_source(source)
     if _mlflow_enabled():
-        return _promote_mlflow()
-    return _promote_local()
+        return _promote_mlflow(source, alias)
+    return _promote_local(source, local_file)
 
 
 def rollback() -> dict:
@@ -51,14 +68,14 @@ def rollback() -> dict:
 
 
 # ------------------------------------------------------------------ MLflow
-def _promote_mlflow() -> dict:
+def _promote_mlflow(source: str, source_alias: str) -> dict:
     import mlflow
     from mlflow.tracking import MlflowClient
 
     mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     client = MlflowClient()
 
-    challenger = client.get_model_version_by_alias(MLFLOW_MODEL_NAME, MLFLOW_CHALLENGER_ALIAS)
+    candidate = client.get_model_version_by_alias(MLFLOW_MODEL_NAME, source_alias)
     try:
         champion = client.get_model_version_by_alias(MLFLOW_MODEL_NAME, MLFLOW_MODEL_ALIAS)
         client.set_registered_model_alias(MLFLOW_MODEL_NAME, "previous", champion.version)
@@ -66,13 +83,15 @@ def _promote_mlflow() -> dict:
     except Exception:  # noqa: BLE001 - si no hay champion previo, no hay nada que respaldar
         prev = None
 
-    client.set_registered_model_alias(MLFLOW_MODEL_NAME, MLFLOW_MODEL_ALIAS, challenger.version)
-    client.delete_registered_model_alias(MLFLOW_MODEL_NAME, MLFLOW_CHALLENGER_ALIAS)
+    client.set_registered_model_alias(MLFLOW_MODEL_NAME, MLFLOW_MODEL_ALIAS, candidate.version)
+    # El modelo promovido deja de ser sombra: retiramos su alias de origen.
+    client.delete_registered_model_alias(MLFLOW_MODEL_NAME, source_alias)
     _reload_serving()
-    logger.success(f"Promovido challenger v{challenger.version} a champion (previo v{prev}).")
+    logger.success(f"Promovido {source} v{candidate.version} a champion (previo v{prev}).")
     return {
         "mode": "mlflow",
-        "promoted_version": challenger.version,
+        "source": source,
+        "promoted_version": candidate.version,
         "previous_version": prev,
         "status": "deployed",
     }
@@ -90,19 +109,20 @@ def _rollback_mlflow() -> dict:
 
 
 # ------------------------------------------------------------------- local
-def _promote_local() -> dict:
-    if not CHALLENGER_FILE.exists():
+def _promote_local(source: str, source_file) -> dict:
+    if not source_file.exists():
         raise FileNotFoundError(
-            f"No hay challenger local en {CHALLENGER_FILE}; entrená/activá uno primero."
+            f"No hay {source} local en {source_file}; entrená/activá uno primero."
         )
     if MODEL_FILE.exists():
         shutil.copyfile(MODEL_FILE, PREVIOUS_FILE)
-    shutil.copyfile(CHALLENGER_FILE, MODEL_FILE)
-    CHALLENGER_FILE.unlink()  # el challenger ya es champion; no queda sombra
+    shutil.copyfile(source_file, MODEL_FILE)
+    source_file.unlink()  # el modelo promovido ya es champion; no queda sombra
     _reload_serving()
-    logger.success("Promovido challenger local a champion (previo en previous.joblib).")
+    logger.success(f"Promovido {source} local a champion (previo en previous.joblib).")
     return {
         "mode": "local",
+        "source": source,
         "status": "deployed",
         "previous_backup": str(PREVIOUS_FILE) if PREVIOUS_FILE.exists() else None,
     }

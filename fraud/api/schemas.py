@@ -44,7 +44,7 @@ class Transaction(BaseModel):
 
 
 class ChallengerScore(BaseModel):
-    """Predicción del challenger en sombra (no decide)."""
+    """Predicción de un modelo en sombra (challenger o federado): no decide."""
 
     is_fraud: bool
     probability: float
@@ -64,6 +64,9 @@ class PredictionResponse(BaseModel):
     status: str | None = Field(None, description="Estado de la tx: OK | PENDING")
     challenger: ChallengerScore | None = Field(
         None, description="Predicción del challenger en sombra, si hay uno activo"
+    )
+    federated: ChallengerScore | None = Field(
+        None, description="Predicción del modelo federado en sombra, si hay uno activo"
     )
 
 

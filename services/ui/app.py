@@ -106,9 +106,12 @@ def evaluar() -> dict:
     return resp.json()
 
 
-def deploy(action: str) -> dict:
+def deploy(action: str, source: str = "challenger") -> dict:
     resp = requests.post(
-        f"{REST_URL}/v1/mlops/deploy", params={"action": action}, headers=_headers(), timeout=HTTP_TIMEOUT
+        f"{REST_URL}/v1/mlops/deploy",
+        params={"action": action, "source": source},
+        headers=_headers(),
+        timeout=HTTP_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()
@@ -191,6 +194,16 @@ def vista_scoring_manual() -> None:
     else:
         st.caption("No hay challenger activo en este momento.")
 
+    federated = r.get("federated")
+    if federated:
+        st.info(
+            f"Federado en sombra (MLP Flower, no decide): "
+            f"prob {federated['probability']:.2%} · fraude={federated['is_fraud']} · "
+            f"v{federated['model_version']}"
+        )
+    else:
+        st.caption("No hay modelo federado activo en este momento.")
+
 
 def _features_resumen(tx: dict) -> str:
     f = tx.get("features", {})
@@ -216,11 +229,13 @@ def vista_cola_revision() -> None:
     for tx in pendientes:
         champ = tx.get("champion") or {}
         chal = tx.get("challenger") or {}
+        fed = tx.get("federated") or {}
         filas.append({
             "transaction_id": tx["transaction_id"],
             "monto": (tx.get("features") or {}).get("amt"),
             "prob_champion": champ.get("probability"),
             "prob_challenger": chal.get("probability"),
+            "prob_federado": fed.get("probability"),
         })
     st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
 
@@ -302,8 +317,9 @@ def vista_transacciones() -> None:
 
 
 def vista_mlops() -> None:
-    st.header("MLOps — challenger / champion")
-    st.caption("Evaluá el challenger contra la ground truth y, si mejora, desplegalo.")
+    st.header("MLOps — champion / challenger / federado")
+    st.caption("Evaluá los modelos en sombra (challenger y federado) contra la ground "
+               "truth y, si mejoran, desplegá el que prefieras.")
 
     st.info("Tras correr el DAG (retrain), apretá **Recargar modelos** para que el "
             "serving tome el nuevo challenger sin reiniciar nada.")
@@ -311,7 +327,11 @@ def vista_mlops() -> None:
         try:
             r = recargar_modelos()
             ch = "sí" if r.get("has_challenger") else "no"
-            st.success(f"Recargado. Champion: {r.get('champion_version')} · challenger activo: {ch}")
+            fed = "sí" if r.get("has_federated") else "no"
+            st.success(
+                f"Recargado. Champion: {r.get('champion_version')} · "
+                f"challenger activo: {ch} · federado activo: {fed}"
+            )
         except requests.RequestException as err:
             st.error(f"No se pudo recargar: {err}")
 
@@ -335,29 +355,41 @@ def vista_mlops() -> None:
 
     st.divider()
 
-    if st.button("Evaluar challenger vs champion"):
+    if st.button("Evaluar sombra vs champion"):
         try:
             rep = evaluar()
         except requests.RequestException as err:
             st.error(f"No se pudo evaluar. Detalle: {err}")
             return
         st.write(f"Transacciones con ground truth: **{rep.get('n_with_ground_truth', 0)}**")
-        comp = {k: rep[k] for k in ("champion", "challenger") if rep.get(k)}
+        comp = {k: rep[k] for k in ("champion", "challenger", "federated") if rep.get(k)}
         if comp:
             st.dataframe(pd.DataFrame(comp).T, use_container_width=True)
         if rep.get("challenger_better"):
             st.success(f"El challenger mejora al champion ({rep.get('reason', '')}).")
         else:
             st.info(f"El challenger NO mejora al champion ({rep.get('reason', '')}).")
+        if rep.get("federated") is not None:
+            if rep.get("federated_better"):
+                st.success(f"El federado mejora al champion ({rep.get('reason_federated', '')}).")
+            else:
+                st.info(f"El federado NO mejora al champion ({rep.get('reason_federated', '')}).")
 
-    col1, col2 = st.columns(2)
+    st.caption("Promové el modelo en sombra que prefieras a champion (o revertí al previo).")
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Deploy challenger → champion"):
             try:
-                st.success(f"Deploy: {deploy('promote')}")
+                st.success(f"Deploy: {deploy('promote', source='challenger')}")
             except requests.RequestException as err:
                 st.error(f"Deploy falló: {err}")
     with col2:
+        if st.button("Deploy federado → champion"):
+            try:
+                st.success(f"Deploy: {deploy('promote', source='federated')}")
+            except requests.RequestException as err:
+                st.error(f"Deploy falló: {err}")
+    with col3:
         if st.button("Rollback al champion previo"):
             try:
                 st.warning(f"Rollback: {deploy('rollback')}")

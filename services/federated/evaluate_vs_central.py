@@ -10,6 +10,7 @@ umbral fijo (0.5 para el MLP; para XGBoost se usa su probabilidad de clase 1).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import joblib
@@ -96,6 +97,11 @@ def compare(
     fed_weights: Path = typer.Option(DEFAULT_FED_WEIGHTS, help="Pesos del MLP federado (.npz)."),
     champion_path: Path = typer.Option(DEFAULT_CHAMPION, help="Champion XGBoost (.joblib)."),
     umbral: float = typer.Option(0.5, help="Umbral de decisión para el recall."),
+    metrics_out: Path = typer.Option(
+        None,
+        help="Si se indica, vuelca las métricas del federado a un JSON (lo usa el "
+        "registro en MLflow del DAG para no depender de torch en Airflow).",
+    ),
 ) -> None:
     """Evalúa ambos modelos y muestra la tabla comparativa."""
     logger.info("Leyendo test desde {}", test_path)
@@ -123,6 +129,7 @@ def compare(
     print("=" * 78)
 
     # --- Cuánto del PR-AUC centralizado recupera el federado ---
+    recuperado = 0.0
     if "MLP federado (FedAvg)" in resultados:
         pr_central = resultados["XGBoost (centralizado)"]["pr_auc"]
         pr_fed = resultados["MLP federado (FedAvg)"]["pr_auc"]
@@ -133,6 +140,21 @@ def compare(
             f"(PR-AUC {pr_fed:.4f} vs {pr_central:.4f})."
         )
     print()
+
+    # --- Métricas del federado a JSON (insumo del registro en MLflow del DAG) ---
+    if metrics_out is not None and "MLP federado (FedAvg)" in resultados:
+        fed = resultados["MLP federado (FedAvg)"]
+        payload = {
+            "pr_auc": fed["pr_auc"],
+            "roc_auc": fed["roc_auc"],
+            "recall_fraude": fed["recall_fraude"],
+            "pr_auc_centralizado": resultados["XGBoost (centralizado)"]["pr_auc"],
+            "pct_pr_auc_recuperado": round(recuperado, 2),
+            "n_test": len(y),
+        }
+        metrics_out.parent.mkdir(parents=True, exist_ok=True)
+        metrics_out.write_text(json.dumps(payload, indent=2))
+        logger.success("Métricas del federado volcadas a {}", metrics_out)
 
 
 if __name__ == "__main__":

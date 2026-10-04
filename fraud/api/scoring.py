@@ -19,7 +19,12 @@ import os
 import pandas as pd
 
 from fraud.api import grpc_client
-from fraud.api.model_loader import ModelStore, make_challenger, make_champion
+from fraud.api.model_loader import (
+    ModelStore,
+    make_challenger,
+    make_champion,
+    make_federated,
+)
 from fraud.api.store import STATUS_OK, STATUS_PENDING, TransactionStore, get_store
 
 # Umbral de retención: por encima, la tx se manda a revisión del analista.
@@ -49,6 +54,7 @@ class Scorer:
         champion: ModelStore | None = None,
         challenger: ModelStore | None = None,
         store: TransactionStore | None = None,
+        federated: ModelStore | None = None,
     ) -> None:
         self.champion = champion if champion is not None else make_champion()
         if not self.champion.loaded:
@@ -59,17 +65,29 @@ class Scorer:
         else:
             cand = make_challenger()
             self.challenger = cand if cand.load() else None
+        # El federado es el SEGUNDO modelo en sombra (MLP de Flower). También opcional.
+        if federated is not None:
+            self.federated = federated
+        else:
+            fed = make_federated()
+            self.federated = fed if fed.load() else None
         self.store = store if store is not None else get_store()
 
     @property
     def has_challenger(self) -> bool:
         return self.challenger is not None and self.challenger.loaded
 
+    @property
+    def has_federated(self) -> bool:
+        return self.federated is not None and self.federated.loaded
+
     def reload(self) -> None:
-        """Recarga ambos modelos (p.ej. tras un deploy que promovió un challenger)."""
+        """Recarga los tres modelos (p.ej. tras un deploy o un retrain)."""
         self.champion.reload()
         cand = make_challenger()
         self.challenger = cand if cand.load() else None
+        fed = make_federated()
+        self.federated = fed if fed.load() else None
 
     def score(self, row: dict, transaction_id: str | None = None) -> dict:
         """Puntúa una transacción, decide con el champion y registra todo.
@@ -91,6 +109,8 @@ class Scorer:
 
         # --- challenger (en sombra, no decide) ---
         challenger = _predict_with(self.challenger, row) if self.has_challenger else None
+        # --- federado (segundo modelo en sombra, tampoco decide) ---
+        federated = _predict_with(self.federated, row) if self.has_federated else None
 
         # --- decisión del champion contra el umbral ---
         if champion["probability"] > REVIEW_THRESHOLD:
@@ -102,6 +122,7 @@ class Scorer:
             features=row,
             champion=champion,
             challenger=challenger,
+            federated=federated,
             decision=decision,
             status=status,
             transaction_id=transaction_id,
@@ -115,6 +136,7 @@ class Scorer:
             "decision": decision,
             "status": status,
             "challenger": challenger,
+            "federated": federated,
         }
 
 

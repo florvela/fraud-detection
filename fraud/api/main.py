@@ -171,18 +171,24 @@ def mlops_evaluate(_client: str = Security(validate_token)) -> dict:
 @app.post("/v1/mlops/deploy", tags=["MLOps"])
 def mlops_deploy(
     action: str = "promote",
+    source: str = "challenger",
     _client: str = Security(validate_token),
 ) -> dict:
-    """Promueve el challenger a champion (o revierte): action = promote | rollback (UC6)."""
+    """Promueve un modelo en sombra a champion (o revierte) — UC6.
+
+    action = promote | rollback · source = challenger | federated (qué sombra promover).
+    """
     from fraud.api import deploy
 
     try:
         if action == "promote":
-            result = deploy.promote()
+            result = deploy.promote(source=source)
         elif action == "rollback":
             result = deploy.rollback()
         else:
             raise HTTPException(status_code=422, detail="action debe ser promote|rollback")
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err))
     except FileNotFoundError as err:
         raise HTTPException(status_code=409, detail=str(err))
     except HTTPException:
@@ -213,6 +219,7 @@ def mlops_reload(_client: str = Security(validate_token)) -> dict:
         "status": "reloaded",
         "champion_version": store.version if store.loaded else "unknown",
         "has_challenger": scorer.has_challenger,
+        "has_federated": scorer.has_federated,
         "grpc_champion_version": grpc_version,
     }
 

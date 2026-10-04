@@ -39,10 +39,24 @@ x-airflow-common: &airflow-common
     # Flag opcional de demo: con SEED_BAD_CHAMPION=1 el init siembra como champion
     # el modelo malo versionado (models/badmodel.joblib) en vez de disparar el DAG.
     SEED_BAD_CHAMPION: ${SEED_BAD_CHAMPION:-0}
+    # Ruta del repo EN EL HOST. La usa el DAG federado para correr `docker compose`
+    # contra el daemon del host: los bind mounts (./data, ./models, ./services) se
+    # resuelven en el filesystem del host, así que el repo debe existir en esta misma
+    # ruta dentro del contenedor (ver el volumen ${PWD}:${PWD} abajo).
+    HOST_REPO_DIR: ${PWD}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - .:/opt/airflow/repo
+    # DooD: el DAG federado orquesta los contenedores Flower del stack.
+    - /var/run/docker.sock:/var/run/docker.sock
+    # El repo montado en la MISMA ruta absoluta que el host, para que `docker compose`
+    # (que habla con el daemon del host) resuelva los bind mounts relativos del compose.
+    - ${PWD}:${PWD}
+  # El socket del host suele ser root:root 660; sumamos el grupo 0 al usuario airflow
+  # para poder usarlo (Docker-outside-of-Docker en local/demo).
+  group_add:
+    - "0"
   depends_on:
     postgres:
       condition: service_healthy

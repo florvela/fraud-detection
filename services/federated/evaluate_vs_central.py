@@ -14,19 +14,18 @@ import json
 from pathlib import Path
 
 import joblib
-import numpy as np
-import pandas as pd
-import typer
 from loguru import logger
-
 from model import (
-    NUMERIC_FEATURES,
     CATEGORICAL_FEATURES,
+    NUMERIC_FEATURES,
     TARGET,
     build_model,
     load_preprocessor,
     set_weights,
 )
+import numpy as np
+import pandas as pd
+import typer
 
 app = typer.Typer(add_completion=False, help="Federado vs centralizado (champion XGBoost).")
 
@@ -111,14 +110,22 @@ def compare(
 
     resultados: dict[str, dict] = {}
 
-    logger.info("Evaluando champion XGBoost (centralizado)...")
-    resultados["XGBoost (centralizado)"] = _metricas(y, _probs_champion(df, champion_path), umbral)
-
+    # El federado es lo que estamos evaluando/registrando: sus métricas son obligatorias.
     if fed_weights.exists():
         logger.info("Evaluando MLP federado (FedAvg, sin compartir datos)...")
         resultados["MLP federado (FedAvg)"] = _metricas(y, _probs_federado(df, fed_weights), umbral)
     else:
         logger.warning("No existe {}; corré primero server.py + clientes.", fed_weights)
+
+    # La comparación contra el champion centralizado es un BENCHMARK (el punchline del
+    # TP: cuánto recupera el federado sin centralizar datos). Es best-effort: si el
+    # champion no está o no se puede deserializar (skew de versiones), seguimos con las
+    # métricas del federado solo y NO hacemos fallar el pipeline.
+    try:
+        logger.info("Evaluando champion XGBoost (centralizado) para el benchmark...")
+        resultados["XGBoost (centralizado)"] = _metricas(y, _probs_champion(df, champion_path), umbral)
+    except Exception as exc:  # noqa: BLE001 - benchmark opcional
+        logger.warning("No se pudo evaluar el champion centralizado ({}); sigo sin el benchmark.", exc)
 
     # --- Tabla ---
     print("\n" + "=" * 78)
@@ -128,12 +135,14 @@ def compare(
         print(f"{nombre:<28}{m['pr_auc']:>12.4f}{m['roc_auc']:>12.4f}{m['recall_fraude']:>16.4f}")
     print("=" * 78)
 
-    # --- Cuánto del PR-AUC centralizado recupera el federado ---
-    recuperado = 0.0
-    if "MLP federado (FedAvg)" in resultados:
-        pr_central = resultados["XGBoost (centralizado)"]["pr_auc"]
+    # --- Cuánto del PR-AUC centralizado recupera el federado (si hay ambos) ---
+    tiene_fed = "MLP federado (FedAvg)" in resultados
+    tiene_central = "XGBoost (centralizado)" in resultados
+    pr_central = resultados["XGBoost (centralizado)"]["pr_auc"] if tiene_central else None
+    recuperado = None
+    if tiene_fed and tiene_central:
         pr_fed = resultados["MLP federado (FedAvg)"]["pr_auc"]
-        recuperado = (pr_fed / pr_central * 100.0) if pr_central > 0 else 0.0
+        recuperado = (pr_fed / pr_central * 100.0) if pr_central and pr_central > 0 else 0.0
         print(
             f"\nEl MLP federado recupera el {recuperado:.1f}% del PR-AUC del modelo "
             f"centralizado\nSIN que los bancos compartan sus transacciones "
@@ -142,14 +151,14 @@ def compare(
     print()
 
     # --- Métricas del federado a JSON (insumo del registro en MLflow del DAG) ---
-    if metrics_out is not None and "MLP federado (FedAvg)" in resultados:
+    if metrics_out is not None and tiene_fed:
         fed = resultados["MLP federado (FedAvg)"]
         payload = {
             "pr_auc": fed["pr_auc"],
             "roc_auc": fed["roc_auc"],
             "recall_fraude": fed["recall_fraude"],
-            "pr_auc_centralizado": resultados["XGBoost (centralizado)"]["pr_auc"],
-            "pct_pr_auc_recuperado": round(recuperado, 2),
+            "pr_auc_centralizado": pr_central,
+            "pct_pr_auc_recuperado": None if recuperado is None else round(recuperado, 2),
             "n_test": len(y),
         }
         metrics_out.parent.mkdir(parents=True, exist_ok=True)

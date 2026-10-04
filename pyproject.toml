@@ -22,6 +22,8 @@ requires-python = ">=3.11"
 line-length = 99
 src = ["fraud"]
 include = ["pyproject.toml", "fraud/**/*.py"]
+# No lintear código generado (stubs de protobuf que regenera protoc en el build).
+extend-exclude = ["fraud/api/proto/*_pb2*.py"]
 
 [tool.ruff.lint]
 extend-select = ["I"]  # Add import sorting
@@ -29,4 +31,15 @@ extend-select = ["I"]  # Add import sorting
 [tool.ruff.lint.isort]
 known-first-party = ["fraud"]
 force-sort-within-sections = true
+
+[tool.ruff.lint.flake8-bugbear]
+# typer/fastapi usan llamadas en los defaults de la firma a propósito (es su API):
+# las declaramos inmutables para no reportar B008 en ese patrón idiomático.
+extend-immutable-calls = [
+    "typer.Option",
+    "typer.Argument",
+    "fastapi.Depends",
+    "fastapi.Security",
+    "fastapi.Query",
+]
 

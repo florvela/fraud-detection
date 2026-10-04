@@ -7,6 +7,7 @@ import os
 
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
+from loguru import logger
 
 from fraud.api.model_loader import ModelStore
 from fraud.api.schemas import (
@@ -15,6 +16,11 @@ from fraud.api.schemas import (
     PredictionResponse,
     Transaction,
 )
+
+# Orden de features canónico. Lo tomamos de `federated_model` (módulo liviano,
+# solo numpy/pandas) y NO de `fraud.features`, que arrastra typer/sklearn del
+# pipeline de datos y no está instalado en la imagen de serving.
+from fraud.federated_model import FEATURE_ORDER
 
 store = ModelStore()
 store.load()
@@ -30,8 +36,8 @@ try:
     from prometheus_fastapi_instrumentator import Instrumentator
 
     Instrumentator().instrument(app).expose(app, endpoint="/metrics")
-except Exception:
-    pass
+except Exception as exc:  # noqa: BLE001 - /metrics es opcional (p.ej. dev local sin la lib)
+    logger.debug(f"Prometheus instrumentator no disponible, sigo sin /metrics: {exc}")
 
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 _valid_tokens = os.getenv("API_KEYS", "token-secreto-123")
@@ -51,10 +57,50 @@ def health() -> HealthResponse:
     return HealthResponse(status=status, model_version=version)
 
 
-FEATURE_ORDER = [
-    "amt", "category", "gender", "city_pop", "lat",
-    "long", "merch_lat", "merch_long", "hour", "age",
-]
+# Tipado nativo por columna para serializar a JSON/SQLite sin tipos numpy.
+_INT_COLS = {"city_pop", "hour", "age"}
+_FLOAT_COLS = {"amt", "lat", "long", "merch_lat", "merch_long"}
+
+
+def _coerce_row(raw: dict) -> dict:
+    """Normaliza una fila cruda a tipos nativos de Python en el orden de features."""
+    row: dict = {}
+    for col in FEATURE_ORDER:
+        val = raw[col]
+        if col in _INT_COLS:
+            row[col] = int(val)
+        elif col in _FLOAT_COLS:
+            row[col] = float(val)
+        else:
+            row[col] = str(val)
+    return row
+
+
+def _load_seed_frauds(n: int, seed: int) -> tuple[list[dict], str]:
+    """Devuelve `n` fraudes para sembrar y la fuente usada ('dataset' | 'fallback').
+
+    Prioriza casos REALES del split de test (`data/processed/test.parquet`); si no está
+    disponible, cae al archivo curado `seed_frauds.json`.
+    """
+    from fraud.config import PROCESSED_DATA_DIR
+
+    test_path = PROCESSED_DATA_DIR / "test.parquet"
+    if test_path.exists():
+        import pandas as pd
+
+        df = pd.read_parquet(test_path)
+        frauds = df[df["is_fraud"] == 1]
+        if len(frauds) > 0:
+            take = min(n, len(frauds))
+            sample = frauds.sample(n=take, random_state=seed)
+            return [_coerce_row(r) for r in sample[FEATURE_ORDER].to_dict("records")], "dataset"
+
+    import json
+    from pathlib import Path
+
+    seed_path = Path(__file__).parent / "seed_frauds.json"
+    rows = json.loads(seed_path.read_text())[:n]
+    return [_coerce_row(r) for r in rows], "fallback"
 
 
 @app.post("/v1/predict", response_model=PredictionResponse, tags=["Model v1"])
@@ -168,6 +214,66 @@ def mlops_evaluate(_client: str = Security(validate_token)) -> dict:
     return evaluation.evaluate()
 
 
+@app.post("/v1/mlops/compare-federated", tags=["MLOps"])
+def mlops_compare_federated(
+    threshold: float = 0.5,
+    _client: str = Security(validate_token),
+) -> dict:
+    """Benchmark offline sobre el test: **federado vs champion (centralizado)**.
+
+    Responde la pregunta del TP: ¿cuánto del PR-AUC del modelo centralizado recupera el
+    federado SIN que los bancos compartan datos? Es un benchmark a demanda (NO parte del
+    reentrenamiento): evalúa ambos modelos sobre `data/processed/test.parquet` y devuelve
+    PR-AUC / ROC-AUC / recall de cada uno + el % recuperado.
+    """
+    from fraud.api.model_loader import make_champion, make_federated
+    from fraud.config import PROCESSED_DATA_DIR
+
+    test_path = PROCESSED_DATA_DIR / "test.parquet"
+    if not test_path.exists():
+        raise HTTPException(status_code=404, detail=f"No existe {test_path} para el benchmark")
+
+    federated = make_federated()
+    if not federated.load():
+        raise HTTPException(
+            status_code=409,
+            detail="No hay modelo federado activo; corré el DAG fraud_federate_pipeline primero.",
+        )
+    champion = make_champion()
+    champion.load()
+
+    import pandas as pd
+    from sklearn.metrics import average_precision_score, recall_score, roc_auc_score
+
+    df = pd.read_parquet(test_path)
+    y = df["is_fraud"].to_numpy(dtype=int)
+
+    def _metrics(store: ModelStore) -> dict:
+        proba = store.pipeline.predict_proba(df[store.feature_order])[:, 1]
+        pred = (proba >= threshold).astype(int)
+        return {
+            "model_version": store.version,
+            "pr_auc": round(float(average_precision_score(y, proba)), 4),
+            "roc_auc": round(float(roc_auc_score(y, proba)), 4),
+            "recall_fraude": round(float(recall_score(y, pred, zero_division=0)), 4),
+        }
+
+    centralizado = _metrics(champion)
+    federado = _metrics(federated)
+    pct = (
+        round(federado["pr_auc"] / centralizado["pr_auc"] * 100, 1)
+        if centralizado["pr_auc"] > 0
+        else None
+    )
+    return {
+        "n_test": len(y),
+        "fraude_test": round(float(y.mean()), 5),
+        "centralizado": centralizado,
+        "federado": federado,
+        "pct_pr_auc_recuperado": pct,
+    }
+
+
 @app.post("/v1/mlops/deploy", tags=["MLOps"])
 def mlops_deploy(
     action: str = "promote",
@@ -227,60 +333,53 @@ def mlops_reload(_client: str = Security(validate_token)) -> dict:
 @app.post("/v1/mlops/seed-frauds", tags=["MLOps"])
 def mlops_seed_frauds(
     n: int = 30,
+    seed: int = 42,
     _client: str = Security(validate_token),
 ) -> dict:
-    """Siembra fraudes post-mortem desde `seed_frauds.json` para poblar la ground truth.
+    """Siembra fraudes post-mortem muestreando casos REALES del dataset para poblar la ground truth.
 
-    Para cada fila: la scorea (champion decide + challenger en sombra, todo se registra)
-    y le pega un label de fraude (post-mortem). Pensado para correrse DESPUÉS de
-    'Recargar modelos' (con el challenger activo) para que se registren ambas
-    predicciones y la evaluación challenger vs champion tenga sentido.
+    Toma `n` transacciones de fraude reales del split de test (`data/processed/test.parquet`),
+    las scorea (champion decide + challenger/federado en sombra, todo se registra en
+    `fraud.db`) y les pega un label de fraude (post-mortem). Así la ground truth proviene
+    de datos reales del sistema, no de un archivo curado a mano.
+
+    Correr DESPUÉS de 'Recargar modelos' (con las sombras activas) para que se registren
+    todas las predicciones y la evaluación tenga sentido. Si no hay dataset disponible,
+    cae a `seed_frauds.json` (fallback).
     """
-    import json
-    from pathlib import Path
-
     from fraud.api.scoring import get_scorer
     from fraud.api.store import SOURCE_POST_MORTEM, get_store
 
-    seed_path = Path(__file__).parent / "seed_frauds.json"
-    with open(seed_path) as f:
-        rows = json.load(f)
-    rows = rows[:n]
-
-    int_cols = {"city_pop", "hour", "age"}
-    float_cols = {"amt", "lat", "long", "merch_lat", "merch_long"}
-    str_cols = {"category", "gender"}
+    rows, source = _load_seed_frauds(n, seed)
 
     scorer = get_scorer()
     store_ = get_store()
     seeded = 0
     with_challenger = 0
-    for raw in rows:
-        row = {}
-        for col in FEATURE_ORDER:
-            val = raw[col]
-            if col in int_cols:
-                row[col] = int(val)
-            elif col in float_cols:
-                row[col] = float(val)
-            elif col in str_cols:
-                row[col] = str(val)
-            else:
-                row[col] = val
+    with_federated = 0
+    for row in rows:
         result = scorer.score(row)
         tid = result["transaction_id"]
         store_.add_label(tid, label=1, source=SOURCE_POST_MORTEM)
         seeded += 1
         if result.get("challenger") is not None:
             with_challenger += 1
+        if result.get("federated") is not None:
+            with_federated += 1
 
-    note = "ground truth sembrada; ya podés evaluar challenger vs champion."
-    if seeded > 0 and with_challenger == 0:
+    note = "ground truth sembrada desde datos reales; ya podés evaluar las sombras vs champion."
+    if seeded > 0 and with_challenger == 0 and with_federated == 0:
         note = (
-            "challenger no activo: recargá modelos (MLOps → Recargar) ANTES de "
-            "sembrar para que se registren ambas predicciones"
+            "ningún modelo en sombra activo: recargá modelos (MLOps → Recargar) ANTES de "
+            "sembrar para que se registren las predicciones comparables"
         )
-    return {"seeded": seeded, "with_challenger": with_challenger, "note": note}
+    return {
+        "seeded": seeded,
+        "with_challenger": with_challenger,
+        "with_federated": with_federated,
+        "source": source,
+        "note": note,
+    }
 
 
 @app.post("/v1/mlops/train", status_code=202, tags=["MLOps"])

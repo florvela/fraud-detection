@@ -10,4 +10,7 @@ xgboost==2.1.1
 joblib==1.4.2
 loguru==0.7.2
 typer==0.12.5
+# Typer 0.12.x usa la API vieja de Click (make_metavar sin `ctx`). Click >=8.2 la
+# cambió y rompe el CLI (incluido --help y el parseo de opciones). Fijamos Click <8.2.
+click<8.2
 pyarrow==17.0.0

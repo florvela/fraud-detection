@@ -267,6 +267,7 @@ services:
   # Quedan OPT-IN (dependen de datos que genera Airflow en runtime):
   #   - federado:  docker compose --profile federated up -d   (necesita silos)
   #   - Evidently: docker compose --profile monitoring up -d  (necesita data/processed)
+  #   - carga:     docker compose --profile loadtest up -d    (Locust en :8089)
   #   - todo:      docker compose --profile full up -d --build
   #
   # Streaming (Mini-TP 4) ya no vive acá: es un compose autocontenido en
@@ -312,6 +313,24 @@ services:
     volumes:
       - ./services/federated/data:/app/data:ro
     depends_on: [fed-server]
+    networks: [fraudnet]
+
+  # --- Prueba de carga (Locust): simula muchos clientes y mide latencias -----
+  # Web UI en http://localhost:8089 — elegís Nº de usuarios y ves RPS + p95/p99.
+  # El tráfico usa transacciones reales de test.parquet y queda en fraud.db.
+  loadtest:
+    build: ./services/loadtest
+    profiles: ["full", "loadtest"]
+    environment:
+      LOCUST_HOST: http://rest:8080
+      API_KEY: token-secreto-123
+      LOADTEST_DATA: /app/data/processed/test.parquet
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      - rest
     networks: [fraudnet]
 
   # --- Monitoreo: Prometheus + Grafana + Evidently (drift) ------------------

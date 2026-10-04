@@ -13,8 +13,11 @@ Pasos
 2. **federated_train**: levanta ``fed-server`` + ``fed-client-a/b`` del compose
    (perfil ``federated``) y espera a que el servidor complete los rounds y guarde
    el modelo global en ``models/mlp_federado.npz``.
-3. **evaluate_vs_central**: compara el federado contra el champion XGBoost sobre el
-   test y vuelca las métricas a ``models/federated_metrics.json``.
+3. **evaluate_federated**: calcula las métricas PROPIAS del federado sobre el test
+   (PR-AUC/ROC-AUC/recall) y las vuelca a ``models/federated_metrics.json``. NO
+   compara contra el champion: el entrenamiento se autoevalúa y no depende de que
+   exista un modelo centralizado. (El benchmark federado-vs-central es aparte:
+   ``evaluate_vs_central.py``, a demanda.)
 4. **register_federated**: envuelve el MLP en un pipeline sklearn y lo registra en
    MLflow como el alias ``federated`` del modelo ``fraud-detection`` (queda listo
    para correr en sombra y, opcionalmente, promoverse a champion desde la UI).
@@ -91,13 +94,15 @@ with DAG(
         ),
     )
 
-    # 3. Federado vs champion centralizado sobre el test; vuelca métricas a JSON.
-    #    Corre dentro de la imagen federada (tiene torch) con `compose run`.
+    # 3. Métricas PROPIAS del federado sobre el test (sin comparar contra otro modelo):
+    #    un entrenamiento se autoevalúa y NO debe depender de que exista un champion
+    #    centralizado. La comparación federado-vs-central es aparte (evaluate_vs_central.py,
+    #    a demanda). Corre en la imagen federada (tiene torch) con `compose run`.
     evaluate = BashOperator(
-        task_id="evaluate_vs_central",
+        task_id="evaluate_federated",
         bash_command=(
             f"{DC} run --rm --no-deps fed-server "
-            f"python evaluate_vs_central.py --metrics-out /app/models/federated_metrics.json"
+            f"python evaluate_federated.py --metrics-out /app/models/federated_metrics.json"
         ),
     )
 

@@ -31,7 +31,14 @@ import mlflow
 from mlflow.tracking import MlflowClient
 
 from fraud.config import MODELS_DIR, PROJ_ROOT
-from fraud.federated_model import FEATURE_ORDER, build_pipeline, load_weights_npz
+from fraud.federated_model import (
+    CATEGORICAL_FEATURES,
+    CATEGORY_VOCAB,
+    FEATURE_ORDER,
+    NUMERIC_FEATURES,
+    build_pipeline,
+    load_weights_npz,
+)
 
 MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "fraud-detection")
 FEDERATED_ALIAS = os.getenv("MLFLOW_FEDERATED_ALIAS", "federated")
@@ -72,6 +79,11 @@ def main() -> None:
     artifact = {
         "pipeline": pipeline,
         "feature_order": FEATURE_ORDER,
+        "numeric_features": NUMERIC_FEATURES,
+        "categorical_features": CATEGORICAL_FEATURES,
+        # Mismo contrato que el artefacto XGBoost: así /v1/model-info y la UI tienen
+        # las categorías aunque el federado sea el champion servido.
+        "categories": {k: list(v) for k, v in CATEGORY_VOCAB.items()},
         "version": version,
         "metrics": metrics,
         "model_kind": "federated-mlp",

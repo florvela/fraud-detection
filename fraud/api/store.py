@@ -219,6 +219,29 @@ class TransactionStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def labeled_training_rows(self) -> list[dict]:
+        """Filas de entrenamiento inyectadas: features crudas + target real.
+
+        Insumo del reentrenamiento (UC): devuelve una fila por transacción que ya
+        tiene label (seed del analista + revisiones). Cada dict trae exactamente las
+        claves de FEATURES (las guardó el scoring con el feature_order del modelo)
+        más `is_fraud` con el label real.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT t.features, l.label
+                FROM transactions t
+                JOIN labels l ON l.transaction_id = t.transaction_id
+                """
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            d = json.loads(r["features"])
+            d["is_fraud"] = int(r["label"])
+            out.append(d)
+        return out
+
     def counts(self) -> dict:
         with self._lock:
             n_tx = self._conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]

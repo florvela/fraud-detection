@@ -51,6 +51,19 @@ def predict(row: dict) -> tuple[bool, float, str]:
     return bool(pred.is_fraud), float(pred.probability), str(pred.model_version)
 
 
+def get_model_info() -> tuple[str, str] | None:
+    """Pide al núcleo gRPC la info del champion que REALMENTE decide.
+
+    Devuelve (name, version), o None si no hay delegación o la llamada falla."""
+    if not delegates_to_grpc():
+        return None
+    try:
+        info = _get_stub().GetModelInfo(fraud_pb2.Empty())
+        return str(info.name), str(info.version)
+    except grpc.RpcError:
+        return None
+
+
 def reload_remote() -> str | None:
     """Pide al núcleo gRPC que recargue el champion (tras un deploy). Devuelve la
     versión nueva, o None si no hay delegación o la llamada falla."""

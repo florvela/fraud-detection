@@ -17,6 +17,7 @@ El serving carga cada alias por su cuenta, así que nada de esto reconstruye im�
 
 from __future__ import annotations
 
+import json
 import os
 
 import joblib
@@ -24,7 +25,7 @@ import mlflow
 from loguru import logger
 from mlflow.tracking import MlflowClient
 
-from fraud.config import MODELS_DIR
+from fraud.config import MODELS_DIR, PROCESSED_DATA_DIR
 
 MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "fraud-detection")
 CHAMPION_ALIAS = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
@@ -61,6 +62,17 @@ def main() -> None:
     with mlflow.start_run(run_name=f"train-{version}") as run:
         mlflow.log_param("model_version", version)
         mlflow.log_param("feature_order", artifact.get("feature_order"))
+        # Tamaño del dataset usado en el retrain (base original + inyectados).
+        meta_file = PROCESSED_DATA_DIR / "train_meta.json"
+        if meta_file.exists():
+            meta = json.loads(meta_file.read_text())
+            mlflow.log_param("n_rows_base", meta.get("n_base"))
+            mlflow.log_param("n_rows_injected", meta.get("n_injected"))
+            mlflow.log_param("n_rows_total", meta.get("n_total"))
+            logger.info(
+                f"Dataset: base={meta.get('n_base')} "
+                f"injected={meta.get('n_injected')} total={meta.get('n_total')}"
+            )
         for k, v in metrics.items():
             mlflow.log_metric(k, float(v))
         # Logueamos el dict joblib entero como artefacto: el serving lo descarga tal cual

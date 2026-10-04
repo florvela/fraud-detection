@@ -29,6 +29,8 @@ MLFLOW_MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "fraud-detection")
 MLFLOW_MODEL_ALIAS = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
 # Nombre del archivo joblib tal como lo loguea el DAG de entrenamiento
 MLFLOW_ARTIFACT_PATH = os.getenv("MLFLOW_ARTIFACT_PATH", "model_artifact/model.joblib")
+# Si es "1", NO caer al archivo local cuando el registry falla (falla fuerte).
+MLFLOW_REQUIRE_ALIAS = os.getenv("MLFLOW_REQUIRE_ALIAS", "0")
 
 
 class ModelStore:
@@ -55,11 +57,28 @@ class ModelStore:
         return self._source
 
     def load(self) -> bool:
-        """Intenta el registry de MLflow y, si no, el archivo local."""
+        """Intenta el registry de MLflow y, si no, el archivo local.
+
+        Si `MLFLOW_TRACKING_URI` está seteada y el registry falla, por defecto cae
+        al archivo local (fallback), pero logueando a nivel ERROR porque ese archivo
+        puede NO ser el champion esperado. Si `MLFLOW_REQUIRE_ALIAS="1"`, NO cae al
+        archivo local: devuelve False (modelo no cargado) para fallar fuerte en vez
+        de servir el modelo equivocado en silencio.
+        """
         if MLFLOW_TRACKING_URI:
             if self._load_from_registry():
                 return True
-            logger.warning("No se pudo cargar del registry; intento archivo local.")
+            logger.error(
+                "REGISTRY FALLÓ para alias '{}': sirviendo FALLBACK LOCAL {} — "
+                "puede NO ser el champion esperado",
+                self._alias,
+                self._local_file,
+            )
+            if MLFLOW_REQUIRE_ALIAS == "1":
+                logger.error(
+                    "MLFLOW_REQUIRE_ALIAS=1: NO se cae al archivo local; modelo NO cargado."
+                )
+                return False
         return self._load_from_file()
 
     def _load_from_registry(self) -> bool:

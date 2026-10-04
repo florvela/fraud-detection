@@ -82,7 +82,17 @@ def predict(
 def model_info() -> dict:
     if not store.loaded:
         raise HTTPException(status_code=503, detail="Modelo no disponible")
-    return {"name": "fraud-detection", **store.info}
+    # El champion que REALMENTE decide es el del núcleo gRPC (si hay delegación);
+    # lo exponemos aparte para que la UI/health no mientan si el store de REST difiere.
+    from fraud.api import grpc_client
+
+    serving = grpc_client.get_model_info()
+    serving_champion_version = serving[1] if serving else None
+    return {
+        "name": "fraud-detection",
+        **store.info,
+        "serving_champion_version": serving_champion_version,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -205,6 +215,65 @@ def mlops_reload(_client: str = Security(validate_token)) -> dict:
         "has_challenger": scorer.has_challenger,
         "grpc_champion_version": grpc_version,
     }
+
+
+@app.post("/v1/mlops/seed-frauds", tags=["MLOps"])
+def mlops_seed_frauds(
+    n: int = 30,
+    _client: str = Security(validate_token),
+) -> dict:
+    """Siembra fraudes post-mortem desde `seed_frauds.json` para poblar la ground truth.
+
+    Para cada fila: la scorea (champion decide + challenger en sombra, todo se registra)
+    y le pega un label de fraude (post-mortem). Pensado para correrse DESPUÉS de
+    'Recargar modelos' (con el challenger activo) para que se registren ambas
+    predicciones y la evaluación challenger vs champion tenga sentido.
+    """
+    import json
+    from pathlib import Path
+
+    from fraud.api.scoring import get_scorer
+    from fraud.api.store import SOURCE_POST_MORTEM, get_store
+
+    seed_path = Path(__file__).parent / "seed_frauds.json"
+    with open(seed_path) as f:
+        rows = json.load(f)
+    rows = rows[:n]
+
+    int_cols = {"city_pop", "hour", "age"}
+    float_cols = {"amt", "lat", "long", "merch_lat", "merch_long"}
+    str_cols = {"category", "gender"}
+
+    scorer = get_scorer()
+    store_ = get_store()
+    seeded = 0
+    with_challenger = 0
+    for raw in rows:
+        row = {}
+        for col in FEATURE_ORDER:
+            val = raw[col]
+            if col in int_cols:
+                row[col] = int(val)
+            elif col in float_cols:
+                row[col] = float(val)
+            elif col in str_cols:
+                row[col] = str(val)
+            else:
+                row[col] = val
+        result = scorer.score(row)
+        tid = result["transaction_id"]
+        store_.add_label(tid, label=1, source=SOURCE_POST_MORTEM)
+        seeded += 1
+        if result.get("challenger") is not None:
+            with_challenger += 1
+
+    note = "ground truth sembrada; ya podés evaluar challenger vs champion."
+    if seeded > 0 and with_challenger == 0:
+        note = (
+            "challenger no activo: recargá modelos (MLOps → Recargar) ANTES de "
+            "sembrar para que se registren ambas predicciones"
+        )
+    return {"seeded": seeded, "with_challenger": with_challenger, "note": note}
 
 
 @app.post("/v1/mlops/train", status_code=202, tags=["MLOps"])

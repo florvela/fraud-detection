@@ -46,16 +46,22 @@ with DAG(
         bash_command=f"cd {REPO} && python -m fraud.features",
     )
 
-    # 3. Entrenamiento (rebalanceo solo en train) -> models/model.joblib
+    # 3. Feedback: fusiona el train base con las transacciones inyectadas (ground truth)
+    merge_feedback = BashOperator(
+        task_id="merge_feedback",
+        bash_command=f"cd {REPO} && python -m fraud.feedback",
+    )
+
+    # 4. Entrenamiento (rebalanceo solo en train) -> models/model.joblib
     train = BashOperator(
         task_id="train",
         bash_command=f"cd {REPO} && python -m fraud.modeling.train",
     )
 
-    # 4. Registro en MLflow + promoción champion/challenger
+    # 5. Registro en MLflow + promoción champion/challenger
     register = BashOperator(
         task_id="register_model",
         bash_command=f"cd {REPO} && python airflow/scripts/register_model.py",
     )
 
-    ingest >> features >> train >> register
+    ingest >> features >> merge_feedback >> train >> register

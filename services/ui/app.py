@@ -120,6 +120,12 @@ def recargar_modelos() -> dict:
     return resp.json()
 
 
+def sembrar_fraudes() -> dict:
+    resp = requests.post(f"{REST_URL}/v1/mlops/seed-frauds", headers=_headers(), timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def obtener_model_info() -> dict:
     resp = requests.get(f"{REST_URL}/v1/model-info", headers=_headers(), timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
@@ -311,6 +317,24 @@ def vista_mlops() -> None:
 
     st.divider()
 
+    st.caption("Sembrá fraudes post-mortem para poblar la ground truth. Corré esto "
+               "DESPUÉS de **Recargar modelos** (con el challenger activo) para que se "
+               "registren las predicciones de ambos modelos y la evaluación tenga sentido.")
+    if st.button("🌱 Sembrar 30 fraudes (post-mortem)"):
+        try:
+            r = sembrar_fraudes()
+        except requests.RequestException as err:
+            st.error(f"No se pudo sembrar: {err}")
+        else:
+            msg = (f"Sembrados: {r.get('seeded', 0)} · "
+                   f"con challenger: {r.get('with_challenger', 0)}. {r.get('note', '')}")
+            if r.get("seeded", 0) > 0 and r.get("with_challenger", 0) == 0:
+                st.warning(msg)
+            else:
+                st.success(msg)
+
+    st.divider()
+
     if st.button("Evaluar challenger vs champion"):
         try:
             rep = evaluar()
@@ -350,9 +374,23 @@ def vista_modelo() -> None:
         st.error(f"No se pudo contactar la API REST en {REST_URL}. Detalle: {err}")
         return
 
-    col1, col2 = st.columns(2)
+    store_version = info.get("version")
+    serving_version = info.get("serving_champion_version")
+
+    col1, col2, col3 = st.columns(3)
     col1.metric("Nombre", str(info.get("name", "desconocido")))
-    col2.metric("Versión", str(info.get("version", "desconocida")))
+    col2.metric("Versión (store REST)", str(store_version if store_version is not None else "desconocida"))
+    col3.metric(
+        "Champion que decide (gRPC)",
+        str(serving_version) if serving_version is not None else "n/d",
+    )
+
+    if serving_version is not None and str(serving_version) != str(store_version):
+        st.warning(
+            f"REST y el núcleo gRPC reportan versiones distintas: "
+            f"store REST = {store_version} · champion que decide (gRPC) = {serving_version}."
+        )
+
     metricas = info.get("metrics")
     if metricas:
         st.subheader("Métricas")

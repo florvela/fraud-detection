@@ -223,6 +223,9 @@ services:
       - "8080:8080"
     volumes:
       - ./models:/app/models   # fallback local
+      # Persiste fraud.db en el host y lo COMPARTE con Airflow (que monta todo el
+      # repo): habilita que el retrain del DAG lea las transacciones inyectadas.
+      - ./data:/app/data
     depends_on:
       grpc:
         condition: service_started
@@ -266,6 +269,11 @@ services:
     environment:
       FED_SERVER: "0.0.0.0:8080"
       FED_ROUNDS: "5"
+    volumes:
+      # test.parquet (solo-lectura) + champion/escritura del mlp_federado.npz:
+      # habilita `docker compose run --rm fed-server python evaluate_vs_central.py`.
+      - ./data:/app/data:ro
+      - ./models:/app/models
     networks: [fraudnet]
 
   fed-client-a:

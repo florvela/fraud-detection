@@ -48,4 +48,8 @@ service FraudScoring {
 
   // unary: pedir sólo name + version (para comparar con REST y GraphQL)
   rpc GetModelInfo(Empty) returns (ModelInfo);
+
+  // unary: recarga el champion desde el registry (lo usa el deploy para que el
+  // núcleo tome el modelo recién promovido sin reiniciar el contenedor).
+  rpc Reload(Empty) returns (ModelInfo);
 }

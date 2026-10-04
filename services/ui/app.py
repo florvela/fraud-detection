@@ -4,9 +4,11 @@ Cara humana del sistema champion/challenger. Consume la API REST (FastAPI):
 
 - **Scoring manual**: POST /v1/predict — muestra la decisión del champion
   (aprobada / en revisión) y, si hay challenger activo, su predicción en sombra.
-- **Cola de revisión** (UC2): GET /v1/reviews?status=PENDING + detalle por
-  /v1/transactions/{id}; el analista resuelve con /decision (aprobar = legítima,
-  rechazar = fraude) y puede denunciar a posteriori con /report-fraud (UC3).
+- **Cola de revisión** (UC2): GET /v1/reviews?status=PENDING; el analista resuelve
+  con /decision (aprobar = legítima, rechazar = fraude).
+- **Transacciones realizadas**: histórico de ya procesadas (OK/APPROVED/REJECTED)
+  vía GET /v1/reviews?status=... + detalle por /v1/transactions/{id}; las que se
+  dejaron pasar (OK/APPROVED) se pueden denunciar a posteriori con /report-fraud (UC3).
 - **MLOps** (UC5/UC6): compara challenger vs champion (/v1/mlops/evaluate) y
   despliega / revierte (/v1/mlops/deploy).
 - **Modelo**: GET /v1/model-info.
@@ -64,6 +66,15 @@ def listar_reviews(status: str = "PENDING") -> list[dict]:
     return resp.json().get("items", [])
 
 
+def listar_por_estados(estados: list[str]) -> list[dict]:
+    """Junta transacciones de varios estados (el endpoint filtra de a uno)."""
+    items: list[dict] = []
+    for estado in estados:
+        items.extend(listar_reviews(estado))
+    items.sort(key=lambda t: t.get("ts", ""), reverse=True)
+    return items
+
+
 def obtener_tx(tx_id: str) -> dict:
     resp = requests.get(
         f"{REST_URL}/v1/transactions/{tx_id}", headers=_headers(), timeout=HTTP_TIMEOUT
@@ -103,6 +114,12 @@ def deploy(action: str) -> dict:
     return resp.json()
 
 
+def recargar_modelos() -> dict:
+    resp = requests.post(f"{REST_URL}/v1/mlops/reload", headers=_headers(), timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def obtener_model_info() -> dict:
     resp = requests.get(f"{REST_URL}/v1/model-info", headers=_headers(), timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
@@ -119,18 +136,20 @@ def vista_scoring_manual() -> None:
 
     with st.form("form_scoring"):
         col1, col2 = st.columns(2)
+        # Defaults = un fraude REAL que el champion malo (sin balanceo) DEJA PASAR
+        # (~11%) pero el challenger bueno ATRAPA (~89%). Ideal para la demo.
         with col1:
-            amt = st.number_input("Monto (amt)", min_value=0.01, value=980.50, step=1.0)
+            amt = st.number_input("Monto (amt)", min_value=0.01, value=925.94, step=1.0)
             category = st.selectbox("Rubro (category)", CATEGORIES, index=CATEGORIES.index("shopping_net"))
-            gender = st.selectbox("Género (gender)", GENDERS)
-            city_pop = st.number_input("Población ciudad (city_pop)", min_value=0, value=12000, step=1000)
-            hour = st.slider("Hora del día (hour)", 0, 23, 3)
+            gender = st.selectbox("Género (gender)", GENDERS, index=GENDERS.index("M"))
+            city_pop = st.number_input("Población ciudad (city_pop)", min_value=0, value=4653, step=1000)
+            hour = st.slider("Hora del día (hour)", 0, 23, 12)
         with col2:
-            age = st.slider("Edad del titular (age)", 0, 120, 27)
-            lat = st.number_input("Latitud titular (lat)", -90.0, 90.0, value=40.71)
-            long = st.number_input("Longitud titular (long)", -180.0, 180.0, value=-74.00)
-            merch_lat = st.number_input("Latitud comercio (merch_lat)", -90.0, 90.0, value=34.05)
-            merch_long = st.number_input("Longitud comercio (merch_long)", -180.0, 180.0, value=-118.24)
+            age = st.slider("Edad del titular (age)", 0, 120, 22)
+            lat = st.number_input("Latitud titular (lat)", -90.0, 90.0, value=40.5046)
+            long = st.number_input("Longitud titular (long)", -180.0, 180.0, value=-77.7186)
+            merch_lat = st.number_input("Latitud comercio (merch_lat)", -90.0, 90.0, value=41.4437)
+            merch_long = st.number_input("Longitud comercio (merch_long)", -180.0, 180.0, value=-78.3918)
         enviado = st.form_submit_button("Predecir")
 
     if not enviado:
@@ -202,7 +221,7 @@ def vista_cola_revision() -> None:
     st.subheader("Resolver")
     for tx in pendientes:
         tx_id = tx["transaction_id"]
-        col_info, col_ok, col_no, col_pm = st.columns([4, 1, 1, 1.4])
+        col_info, col_ok, col_no = st.columns([5, 1, 1])
         with col_info:
             st.write(f"**{tx_id}** — {_features_resumen(tx)}")
         with col_ok:
@@ -215,16 +234,82 @@ def vista_cola_revision() -> None:
                 decidir_tx(tx_id, "reject")
                 st.error(f"{tx_id} rechazada (fraude).")
                 st.rerun()
-        with col_pm:
-            if st.button("Denunciar (post-mortem)", key=f"pm_{tx_id}"):
-                denunciar_tx(tx_id)
-                st.warning(f"{tx_id} denunciada como fraude (post-mortem).")
-                st.rerun()
+
+
+def vista_transacciones() -> None:
+    st.header("Transacciones realizadas")
+    st.caption(
+        "Histórico de transacciones ya procesadas. Las que se dejaron pasar "
+        "(aprobadas / auto-aprobadas) pueden denunciarse como fraude a posteriori "
+        "(post-mortem)."
+    )
+
+    try:
+        # OK = auto-aprobada por el champion · APPROVED/REJECTED = resueltas por el analista
+        realizadas = listar_por_estados(["OK", "APPROVED", "REJECTED"])
+    except requests.RequestException as err:
+        st.error(f"No se pudo contactar la API REST en {REST_URL}. Detalle: {err}")
+        return
+
+    if not realizadas:
+        st.info("Todavía no hay transacciones procesadas.")
+        return
+
+    # Tabla resumen.
+    filas = []
+    for tx in realizadas:
+        champ = tx.get("champion") or {}
+        filas.append({
+            "transaction_id": tx["transaction_id"],
+            "estado": tx.get("status"),
+            "decisión": tx.get("decision") or "-",
+            "monto": (tx.get("features") or {}).get("amt"),
+            "prob_champion": champ.get("probability"),
+        })
+    st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+
+    st.subheader("Detalle y acciones")
+    for tx in realizadas:
+        tx_id = tx["transaction_id"]
+        estado = tx.get("status")
+        with st.expander(f"{tx_id} — {estado} — {_features_resumen(tx)}"):
+            try:
+                detalle = obtener_tx(tx_id)
+            except requests.RequestException as err:
+                st.error(f"No se pudo traer el detalle. Detalle: {err}")
+                continue
+            st.json(detalle)
+
+            label = detalle.get("label")
+            ya_denunciada = bool(label) and label.get("source") == "post_mortem"
+
+            # Post-mortem sólo tiene sentido en transacciones que se dejaron pasar.
+            if estado in ("OK", "APPROVED"):
+                if ya_denunciada:
+                    st.warning("Ya denunciada como fraude (post-mortem).")
+                elif st.button("Denunciar (post-mortem)", key=f"pm_{tx_id}"):
+                    denunciar_tx(tx_id)
+                    st.warning(f"{tx_id} denunciada como fraude (post-mortem).")
+                    st.rerun()
+            elif estado == "REJECTED":
+                st.caption("Rechazada (ya marcada como fraude): no aplica post-mortem.")
 
 
 def vista_mlops() -> None:
     st.header("MLOps — challenger / champion")
     st.caption("Evaluá el challenger contra la ground truth y, si mejora, desplegalo.")
+
+    st.info("Tras correr el DAG (retrain), apretá **Recargar modelos** para que el "
+            "serving tome el nuevo challenger sin reiniciar nada.")
+    if st.button("🔄 Recargar modelos (tras retrain)"):
+        try:
+            r = recargar_modelos()
+            ch = "sí" if r.get("has_challenger") else "no"
+            st.success(f"Recargado. Champion: {r.get('champion_version')} · challenger activo: {ch}")
+        except requests.RequestException as err:
+            st.error(f"No se pudo recargar: {err}")
+
+    st.divider()
 
     if st.button("Evaluar challenger vs champion"):
         try:
@@ -297,13 +382,15 @@ def main() -> None:
         except requests.RequestException:
             st.error("API REST: no disponible")
 
-    tab_scoring, tab_revision, tab_mlops, tab_modelo = st.tabs(
-        ["Scoring manual", "Cola de revisión", "MLOps", "Modelo"]
+    tab_scoring, tab_revision, tab_realizadas, tab_mlops, tab_modelo = st.tabs(
+        ["Scoring manual", "Cola de revisión", "Transacciones realizadas", "MLOps", "Modelo"]
     )
     with tab_scoring:
         vista_scoring_manual()
     with tab_revision:
         vista_cola_revision()
+    with tab_realizadas:
+        vista_transacciones()
     with tab_mlops:
         vista_mlops()
     with tab_modelo:

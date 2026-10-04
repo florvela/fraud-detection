@@ -69,6 +69,13 @@ class FraudScoringServicer(fraud_pb2_grpc.FraudScoringServicer):
         """unary: devuelve sólo name + version (para comparar con REST y GraphQL)."""
         return fraud_pb2.ModelInfo(name=MODEL_NAME, version=store.version)
 
+    def Reload(self, request, context):
+        """Recarga el champion desde el registry (tras un deploy/promote)."""
+        store.reload()
+        version = store.version if store.loaded else "unknown"
+        print(f"Champion recargado desde el registry: v{version}")
+        return fraud_pb2.ModelInfo(name=MODEL_NAME, version=version)
+
 
 def serve() -> None:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

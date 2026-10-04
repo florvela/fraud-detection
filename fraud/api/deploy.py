@@ -118,10 +118,24 @@ def _rollback_local() -> dict:
 
 
 def _reload_serving() -> None:
-    """Recarga el Scorer del serving para que tome el nuevo champion."""
+    """Recarga el serving para que tome el nuevo champion.
+
+    Resetea el Scorer in-process del borde REST y, si el scoring del champion se
+    delega al núcleo gRPC (GRPC_HOST seteada), le pide que recargue su modelo —
+    si no, el contenedor gRPC seguiría sirviendo el champion viejo.
+    """
     try:
         from fraud.api.scoring import reset_scorer
 
         reset_scorer()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"No se pudo resetear el Scorer: {exc}")
+
+    try:
+        from fraud.api import grpc_client
+
+        version = grpc_client.reload_remote()
+        if version is not None:
+            logger.success(f"Núcleo gRPC recargado al champion v{version}.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"No se pudo recargar el núcleo gRPC: {exc}")

@@ -49,6 +49,11 @@ class FraudScoringStub:
                 request_serializer=fraud_dot_api_dot_proto_dot_fraud__pb2.Empty.SerializeToString,
                 response_deserializer=fraud_dot_api_dot_proto_dot_fraud__pb2.ModelInfo.FromString,
                 _registered_method=True)
+        self.Reload = channel.unary_unary(
+                '/fraud.FraudScoring/Reload',
+                request_serializer=fraud_dot_api_dot_proto_dot_fraud__pb2.Empty.SerializeToString,
+                response_deserializer=fraud_dot_api_dot_proto_dot_fraud__pb2.ModelInfo.FromString,
+                _registered_method=True)
 
 
 class FraudScoringServicer:
@@ -75,6 +80,14 @@ class FraudScoringServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Reload(self, request, context):
+        """unary: recarga el champion desde el registry (lo usa el deploy para que el
+        núcleo tome el modelo recién promovido sin reiniciar el contenedor).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_FraudScoringServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -90,6 +103,11 @@ def add_FraudScoringServicer_to_server(servicer, server):
             ),
             'GetModelInfo': grpc.unary_unary_rpc_method_handler(
                     servicer.GetModelInfo,
+                    request_deserializer=fraud_dot_api_dot_proto_dot_fraud__pb2.Empty.FromString,
+                    response_serializer=fraud_dot_api_dot_proto_dot_fraud__pb2.ModelInfo.SerializeToString,
+            ),
+            'Reload': grpc.unary_unary_rpc_method_handler(
+                    servicer.Reload,
                     request_deserializer=fraud_dot_api_dot_proto_dot_fraud__pb2.Empty.FromString,
                     response_serializer=fraud_dot_api_dot_proto_dot_fraud__pb2.ModelInfo.SerializeToString,
             ),
@@ -173,6 +191,33 @@ class FraudScoring:
             request,
             target,
             '/fraud.FraudScoring/GetModelInfo',
+            fraud_dot_api_dot_proto_dot_fraud__pb2.Empty.SerializeToString,
+            fraud_dot_api_dot_proto_dot_fraud__pb2.ModelInfo.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Reload(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/fraud.FraudScoring/Reload',
             fraud_dot_api_dot_proto_dot_fraud__pb2.Empty.SerializeToString,
             fraud_dot_api_dot_proto_dot_fraud__pb2.ModelInfo.FromString,
             options,

@@ -49,3 +49,15 @@ def predict(row: dict) -> tuple[bool, float, str]:
     )
     pred = _get_stub().Predict(tx)
     return bool(pred.is_fraud), float(pred.probability), str(pred.model_version)
+
+
+def reload_remote() -> str | None:
+    """Pide al núcleo gRPC que recargue el champion (tras un deploy). Devuelve la
+    versión nueva, o None si no hay delegación o la llamada falla."""
+    if not delegates_to_grpc():
+        return None
+    try:
+        info = _get_stub().Reload(fraud_pb2.Empty())
+        return str(info.version)
+    except grpc.RpcError:
+        return None

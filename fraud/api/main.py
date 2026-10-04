@@ -185,6 +185,28 @@ def mlops_deploy(
     return result
 
 
+@app.post("/v1/mlops/reload", tags=["MLOps"])
+def mlops_reload(_client: str = Security(validate_token)) -> dict:
+    """Recarga champion + challenger en el serving tras un retrain, SIN reiniciar.
+
+    Resetea el Scorer in-process, recarga el store de /model-info y, si el scoring
+    se delega al núcleo gRPC, le pide que recargue su champion también.
+    """
+    from fraud.api import grpc_client
+    from fraud.api.scoring import get_scorer, reset_scorer
+
+    reset_scorer()
+    store.reload()
+    grpc_version = grpc_client.reload_remote()
+    scorer = get_scorer()  # fuerza la recarga ya mismo
+    return {
+        "status": "reloaded",
+        "champion_version": store.version if store.loaded else "unknown",
+        "has_challenger": scorer.has_challenger,
+        "grpc_champion_version": grpc_version,
+    }
+
+
 @app.post("/v1/mlops/train", status_code=202, tags=["MLOps"])
 def mlops_train(_client: str = Security(validate_token)) -> dict:
     """Dispara el reentrenamiento (UC4).

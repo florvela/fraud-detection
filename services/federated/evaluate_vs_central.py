@@ -29,8 +29,9 @@ from model import (
 
 app = typer.Typer(add_completion=False, help="Federado vs centralizado (champion XGBoost).")
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_SERVICE_DIR = Path(__file__).resolve().parent
+_HERE = Path(__file__).resolve()
+_REPO_ROOT = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent  # /app en Docker
+_SERVICE_DIR = _HERE.parent
 DEFAULT_TEST = _REPO_ROOT / "data" / "processed" / "test.parquet"
 DEFAULT_CHAMPION = _REPO_ROOT / "models" / "model.joblib"
 DEFAULT_FED_WEIGHTS = _SERVICE_DIR / "models" / "mlp_federado.npz"

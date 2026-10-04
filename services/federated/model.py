@@ -51,9 +51,12 @@ CATEGORY_VOCAB = {
     "gender": ["F", "M"],
 }
 
-# Rutas por defecto (relativas a la raíz del repo).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SPEC_PATH = Path(__file__).resolve().parent / "preprocess_spec.json"
+# Rutas por defecto. Local: raíz del repo = 2 niveles arriba. En Docker el archivo
+# está en /app (no hay 2 niveles): _REPO_ROOT cae a /app y DEFAULT_TRAIN_PATH sólo
+# se usa como default (los silos reales llegan por FED_SILO / volumen).
+_HERE = Path(__file__).resolve()
+_REPO_ROOT = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent
+DEFAULT_SPEC_PATH = _HERE.parent / "preprocess_spec.json"
 DEFAULT_TRAIN_PATH = _REPO_ROOT / "data" / "processed" / "train.parquet"
 
 

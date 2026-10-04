@@ -33,8 +33,9 @@ from model import CATEGORICAL_FEATURES, NUMERIC_FEATURES, TARGET
 
 app = typer.Typer(add_completion=False, help="Particiona train en silos no-IID (Banco A / Banco B).")
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_SERVICE_DIR = Path(__file__).resolve().parent
+_HERE = Path(__file__).resolve()
+_REPO_ROOT = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent  # /app en Docker
+_SERVICE_DIR = _HERE.parent
 DEFAULT_TRAIN = _REPO_ROOT / "data" / "processed" / "train.parquet"
 DEFAULT_OUT_DIR = _SERVICE_DIR / "data"
 

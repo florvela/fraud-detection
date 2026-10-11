@@ -156,6 +156,11 @@ class ModelStore:
 CHALLENGER_FILE = MODELS_DIR / "challenger.joblib"
 MLFLOW_CHALLENGER_ALIAS = os.getenv("MLFLOW_CHALLENGER_ALIAS", "challenger")
 
+# Rutas / alias del federado (segundo modelo en sombra, MLP de Flower envuelto en
+# pipeline sklearn por fraud.federated_model). Puede no existir.
+FEDERATED_FILE = MODELS_DIR / "federated.joblib"
+MLFLOW_FEDERATED_ALIAS = os.getenv("MLFLOW_FEDERATED_ALIAS", "federated")
+
 
 def make_champion() -> ModelStore:
     """ModelStore del champion (el que decide)."""
@@ -165,3 +170,8 @@ def make_champion() -> ModelStore:
 def make_challenger() -> ModelStore:
     """ModelStore del challenger (en sombra). Puede no existir: load() devuelve False."""
     return ModelStore(alias=MLFLOW_CHALLENGER_ALIAS, local_file=CHALLENGER_FILE)
+
+
+def make_federated() -> ModelStore:
+    """ModelStore del federado (en sombra). Puede no existir: load() devuelve False."""
+    return ModelStore(alias=MLFLOW_FEDERATED_ALIAS, local_file=FEDERATED_FILE)

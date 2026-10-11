@@ -22,6 +22,11 @@ RUN uv pip install --system --no-cache \
     prometheus-fastapi-instrumentator \
     loguru python-dotenv requests
 
+# torch: necesario para correr el MLP federado (fraud.federated_model) en sombra y,
+# si se promueve, como champion. Mismo pin que la imagen federada (services/federated)
+# para que los pesos del .npz se carguen sin sorpresas de versión.
+RUN uv pip install --system --no-cache torch==2.5.1
+
 # Código de la API (el modelo llega por registry/volumen, no se copia)
 COPY fraud/ ./fraud/
 

@@ -15,6 +15,10 @@ RUN uv pip install --system --no-cache \
     scikit-learn xgboost pandas numpy joblib \
     "mlflow==2.16.2" boto3 loguru python-dotenv
 
+# torch: el núcleo de scoring decide; si se promueve el federado a champion, debe
+# poder correr el MLP. Mismo pin que la imagen federada.
+RUN uv pip install --system --no-cache torch==2.5.1
+
 # Solo el código (el modelo llega por registry o por volumen, no se copia acá)
 COPY fraud/ ./fraud/
 

@@ -34,12 +34,14 @@ REST_URL = os.getenv("REST_URL", "http://rest:8080").rstrip("/")
 API_KEY = os.getenv("API_KEY", "token-secreto-123")
 HTTP_TIMEOUT = 5
 
-CATEGORIES = [
+# Fallback si la API todavía no está disponible o el modelo no expone categorías.
+# Los valores reales se leen del modelo servido (ver `_catalogos`).
+CATEGORIES_FALLBACK = [
     "entertainment", "food_dining", "gas_transport", "grocery_net", "grocery_pos",
     "health_fitness", "home", "kids_pets", "misc_net", "misc_pos",
     "personal_care", "shopping_net", "shopping_pos", "travel",
 ]
-GENDERS = ["F", "M"]
+GENDERS_FALLBACK = ["F", "M"]
 
 
 # --------------------------------------------------------------------------- #
@@ -106,9 +108,22 @@ def evaluar() -> dict:
     return resp.json()
 
 
-def deploy(action: str) -> dict:
+def comparar_federado() -> dict:
+    # Benchmark offline sobre el test (inferencia de ambos modelos): puede tardar unos
+    # segundos con ~40k filas, por eso un timeout generoso.
     resp = requests.post(
-        f"{REST_URL}/v1/mlops/deploy", params={"action": action}, headers=_headers(), timeout=HTTP_TIMEOUT
+        f"{REST_URL}/v1/mlops/compare-federated", headers=_headers(), timeout=120
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def deploy(action: str, source: str = "challenger") -> dict:
+    resp = requests.post(
+        f"{REST_URL}/v1/mlops/deploy",
+        params={"action": action, "source": source},
+        headers=_headers(),
+        timeout=HTTP_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()
@@ -132,6 +147,22 @@ def obtener_model_info() -> dict:
     return resp.json()
 
 
+def _catalogos() -> tuple[list[str], list[str]]:
+    """Categorías y géneros válidos, leídos del modelo servido (con fallback).
+
+    El artefacto del modelo expone `categories` (vocabulario real con el que se
+    entrenó); así los selectores de la UI no quedan hardcodeados y acompañan al modelo.
+    """
+    try:
+        info = obtener_model_info()
+        cats = (info.get("categories") or {})
+        categories = sorted(cats.get("category") or []) or CATEGORIES_FALLBACK
+        genders = sorted(cats.get("gender") or []) or GENDERS_FALLBACK
+        return categories, genders
+    except requests.RequestException:
+        return CATEGORIES_FALLBACK, GENDERS_FALLBACK
+
+
 # --------------------------------------------------------------------------- #
 # Vistas
 # --------------------------------------------------------------------------- #
@@ -140,14 +171,17 @@ def vista_scoring_manual() -> None:
     st.header("Scoring manual")
     st.caption("Cargá una transacción: el champion decide y el challenger (si hay) corre en sombra.")
 
+    categories, genders = _catalogos()
+    cat_default = categories.index("shopping_net") if "shopping_net" in categories else 0
+    gen_default = genders.index("M") if "M" in genders else 0
     with st.form("form_scoring"):
         col1, col2 = st.columns(2)
-        # Defaults = un fraude REAL que el champion malo (sin balanceo) DEJA PASAR
-        # (~11%) pero el challenger bueno ATRAPA (~89%). Ideal para la demo.
+        # Defaults = un fraude REAL que el champion malo (pocas iteraciones) DEJA PASAR
+        # pero el challenger bueno ATRAPA. Ideal para la demo.
         with col1:
             amt = st.number_input("Monto (amt)", min_value=0.01, value=925.94, step=1.0)
-            category = st.selectbox("Rubro (category)", CATEGORIES, index=CATEGORIES.index("shopping_net"))
-            gender = st.selectbox("Género (gender)", GENDERS, index=GENDERS.index("M"))
+            category = st.selectbox("Rubro (category)", categories, index=cat_default)
+            gender = st.selectbox("Género (gender)", genders, index=gen_default)
             city_pop = st.number_input("Población ciudad (city_pop)", min_value=0, value=4653, step=1000)
             hour = st.slider("Hora del día (hour)", 0, 23, 12)
         with col2:
@@ -191,6 +225,16 @@ def vista_scoring_manual() -> None:
     else:
         st.caption("No hay challenger activo en este momento.")
 
+    federated = r.get("federated")
+    if federated:
+        st.info(
+            f"Federado en sombra (MLP Flower, no decide): "
+            f"prob {federated['probability']:.2%} · fraude={federated['is_fraud']} · "
+            f"v{federated['model_version']}"
+        )
+    else:
+        st.caption("No hay modelo federado activo en este momento.")
+
 
 def _features_resumen(tx: dict) -> str:
     f = tx.get("features", {})
@@ -216,11 +260,13 @@ def vista_cola_revision() -> None:
     for tx in pendientes:
         champ = tx.get("champion") or {}
         chal = tx.get("challenger") or {}
+        fed = tx.get("federated") or {}
         filas.append({
             "transaction_id": tx["transaction_id"],
             "monto": (tx.get("features") or {}).get("amt"),
             "prob_champion": champ.get("probability"),
             "prob_challenger": chal.get("probability"),
+            "prob_federado": fed.get("probability"),
         })
     st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
 
@@ -302,8 +348,9 @@ def vista_transacciones() -> None:
 
 
 def vista_mlops() -> None:
-    st.header("MLOps — challenger / champion")
-    st.caption("Evaluá el challenger contra la ground truth y, si mejora, desplegalo.")
+    st.header("MLOps — champion / challenger / federado")
+    st.caption("Evaluá los modelos en sombra (challenger y federado) contra la ground "
+               "truth y, si mejoran, desplegá el que prefieras.")
 
     st.info("Tras correr el DAG (retrain), apretá **Recargar modelos** para que el "
             "serving tome el nuevo challenger sin reiniciar nada.")
@@ -311,7 +358,11 @@ def vista_mlops() -> None:
         try:
             r = recargar_modelos()
             ch = "sí" if r.get("has_challenger") else "no"
-            st.success(f"Recargado. Champion: {r.get('champion_version')} · challenger activo: {ch}")
+            fed = "sí" if r.get("has_federated") else "no"
+            st.success(
+                f"Recargado. Champion: {r.get('champion_version')} · "
+                f"challenger activo: {ch} · federado activo: {fed}"
+            )
         except requests.RequestException as err:
             st.error(f"No se pudo recargar: {err}")
 
@@ -326,38 +377,86 @@ def vista_mlops() -> None:
         except requests.RequestException as err:
             st.error(f"No se pudo sembrar: {err}")
         else:
-            msg = (f"Sembrados: {r.get('seeded', 0)} · "
-                   f"con challenger: {r.get('with_challenger', 0)}. {r.get('note', '')}")
-            if r.get("seeded", 0) > 0 and r.get("with_challenger", 0) == 0:
+            msg = (
+                f"Sembrados: {r.get('seeded', 0)} (fuente: {r.get('source', '?')}) · "
+                f"con challenger: {r.get('with_challenger', 0)} · "
+                f"con federado: {r.get('with_federated', 0)}. {r.get('note', '')}"
+            )
+            if r.get("seeded", 0) > 0 and r.get("with_challenger", 0) == 0 and r.get("with_federated", 0) == 0:
                 st.warning(msg)
             else:
                 st.success(msg)
 
     st.divider()
 
-    if st.button("Evaluar challenger vs champion"):
+    if st.button("Evaluar sombra vs champion"):
         try:
             rep = evaluar()
         except requests.RequestException as err:
             st.error(f"No se pudo evaluar. Detalle: {err}")
             return
         st.write(f"Transacciones con ground truth: **{rep.get('n_with_ground_truth', 0)}**")
-        comp = {k: rep[k] for k in ("champion", "challenger") if rep.get(k)}
+        comp = {k: rep[k] for k in ("champion", "challenger", "federated") if rep.get(k)}
         if comp:
             st.dataframe(pd.DataFrame(comp).T, use_container_width=True)
         if rep.get("challenger_better"):
             st.success(f"El challenger mejora al champion ({rep.get('reason', '')}).")
         else:
             st.info(f"El challenger NO mejora al champion ({rep.get('reason', '')}).")
+        if rep.get("federated") is not None:
+            if rep.get("federated_better"):
+                st.success(f"El federado mejora al champion ({rep.get('reason_federated', '')}).")
+            else:
+                st.info(f"El federado NO mejora al champion ({rep.get('reason_federated', '')}).")
 
-    col1, col2 = st.columns(2)
+    st.divider()
+    st.subheader("Benchmark federado vs centralizado")
+    st.caption("A demanda (NO es parte del reentrenamiento): evalúa el MLP federado y el "
+               "champion centralizado sobre el test y muestra cuánto del PR-AUC recupera "
+               "el federado sin que los bancos compartan datos — la conclusión del TP.")
+    if st.button("📊 Comparar federado vs centralizado"):
+        try:
+            rep = comparar_federado()
+        except requests.HTTPError as err:
+            code = err.response.status_code if err.response is not None else "?"
+            if code == 409:
+                st.warning("No hay modelo federado activo todavía: corré el DAG "
+                           "`fraud_federate_pipeline` y luego 🔄 Recargar modelos.")
+            else:
+                st.error(f"No se pudo comparar (HTTP {code}): {err}")
+        except requests.RequestException as err:
+            st.error(f"No se pudo comparar: {err}")
+        else:
+            st.write(f"Test: **{rep.get('n_test', 0)}** transacciones · "
+                     f"fraude {rep.get('fraude_test', 0):.3%}")
+            tabla = {
+                "centralizado (champion)": rep.get("centralizado", {}),
+                "federado (FedAvg)": rep.get("federado", {}),
+            }
+            st.dataframe(pd.DataFrame(tabla).T, use_container_width=True)
+            pct = rep.get("pct_pr_auc_recuperado")
+            if pct is not None:
+                st.success(
+                    f"El MLP federado recupera el **{pct}%** del PR-AUC del modelo "
+                    f"centralizado, sin que los bancos compartan sus transacciones."
+                )
+
+    st.divider()
+    st.caption("Promové el modelo en sombra que prefieras a champion (o revertí al previo).")
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Deploy challenger → champion"):
             try:
-                st.success(f"Deploy: {deploy('promote')}")
+                st.success(f"Deploy: {deploy('promote', source='challenger')}")
             except requests.RequestException as err:
                 st.error(f"Deploy falló: {err}")
     with col2:
+        if st.button("Deploy federado → champion"):
+            try:
+                st.success(f"Deploy: {deploy('promote', source='federated')}")
+            except requests.RequestException as err:
+                st.error(f"Deploy falló: {err}")
+    with col3:
         if st.button("Rollback al champion previo"):
             try:
                 st.warning(f"Rollback: {deploy('rollback')}")

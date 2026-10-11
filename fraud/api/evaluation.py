@@ -86,6 +86,27 @@ def _verdict(champion: dict | None, challenger: dict | None) -> dict:
     }
 
 
+def _verdict_federated(champion: dict | None, federated: dict | None) -> dict:
+    """Mismo criterio (recall, desempate PR-AUC) pero del federado contra el champion."""
+    if federated is None:
+        return {"federated_better": False, "reason_federated": "no hay predicciones del federado todavía"}
+    if champion is None:
+        return {"federated_better": True, "reason_federated": "no hay predicciones del champion"}
+
+    if federated["recall"] != champion["recall"]:
+        better = federated["recall"] > champion["recall"]
+        return {
+            "federated_better": better,
+            "reason_federated": f"recall federado {federated['recall']} vs champion {champion['recall']}",
+        }
+    f_auc = federated["pr_auc"] or 0.0
+    champ_auc = champion["pr_auc"] or 0.0
+    return {
+        "federated_better": f_auc >= champ_auc,
+        "reason_federated": f"desempate por PR-AUC: federado {f_auc} vs champion {champ_auc}",
+    }
+
+
 def evaluate(store: TransactionStore | None = None, log_to_mlflow: bool = True) -> dict:
     """Compara challenger vs champion sobre las tx con ground truth."""
     store = store or get_store()
@@ -93,13 +114,17 @@ def evaluate(store: TransactionStore | None = None, log_to_mlflow: bool = True) 
 
     champion = _metrics_for(rows, "champion_prob", "champion_is_fraud")
     challenger = _metrics_for(rows, "challenger_prob", "challenger_is_fraud")
+    federated = _metrics_for(rows, "federated_prob", "federated_is_fraud")
     verdict = _verdict(champion, challenger)
+    verdict_fed = _verdict_federated(champion, federated)
 
     result = {
         "n_with_ground_truth": len(rows),
         "champion": champion,
         "challenger": challenger,
+        "federated": federated,
         **verdict,
+        **verdict_fed,
     }
 
     if log_to_mlflow and os.getenv("MLFLOW_TRACKING_URI"):
@@ -117,7 +142,8 @@ def _log_to_mlflow(result: dict) -> None:
         with mlflow.start_run(run_name="challenger-vs-champion"):
             mlflow.log_metric("n_with_ground_truth", result["n_with_ground_truth"])
             mlflow.log_param("challenger_better", result["challenger_better"])
-            for model in ("champion", "challenger"):
+            mlflow.log_param("federated_better", result.get("federated_better"))
+            for model in ("champion", "challenger", "federated"):
                 m = result.get(model)
                 if not m:
                     continue

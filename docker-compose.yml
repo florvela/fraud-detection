@@ -39,10 +39,24 @@ x-airflow-common: &airflow-common
     # Flag opcional de demo: con SEED_BAD_CHAMPION=1 el init siembra como champion
     # el modelo malo versionado (models/badmodel.joblib) en vez de disparar el DAG.
     SEED_BAD_CHAMPION: ${SEED_BAD_CHAMPION:-0}
+    # Ruta del repo EN EL HOST. La usa el DAG federado para correr `docker compose`
+    # contra el daemon del host: los bind mounts (./data, ./models, ./services) se
+    # resuelven en el filesystem del host, así que el repo debe existir en esta misma
+    # ruta dentro del contenedor (ver el volumen ${PWD}:${PWD} abajo).
+    HOST_REPO_DIR: ${PWD}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - .:/opt/airflow/repo
+    # DooD: el DAG federado orquesta los contenedores Flower del stack.
+    - /var/run/docker.sock:/var/run/docker.sock
+    # El repo montado en la MISMA ruta absoluta que el host, para que `docker compose`
+    # (que habla con el daemon del host) resuelva los bind mounts relativos del compose.
+    - ${PWD}:${PWD}
+  # El socket del host suele ser root:root 660; sumamos el grupo 0 al usuario airflow
+  # para poder usarlo (Docker-outside-of-Docker en local/demo).
+  group_add:
+    - "0"
   depends_on:
     postgres:
       condition: service_healthy
@@ -253,6 +267,7 @@ services:
   # Quedan OPT-IN (dependen de datos que genera Airflow en runtime):
   #   - federado:  docker compose --profile federated up -d   (necesita silos)
   #   - Evidently: docker compose --profile monitoring up -d  (necesita data/processed)
+  #   - carga:     docker compose --profile loadtest up -d    (Locust en :8089)
   #   - todo:      docker compose --profile full up -d --build
   #
   # Streaming (Mini-TP 4) ya no vive acá: es un compose autocontenido en
@@ -298,6 +313,24 @@ services:
     volumes:
       - ./services/federated/data:/app/data:ro
     depends_on: [fed-server]
+    networks: [fraudnet]
+
+  # --- Prueba de carga (Locust): simula muchos clientes y mide latencias -----
+  # Web UI en http://localhost:8089 — elegís Nº de usuarios y ves RPS + p95/p99.
+  # El tráfico usa transacciones reales de test.parquet y queda en fraud.db.
+  loadtest:
+    build: ./services/loadtest
+    profiles: ["full", "loadtest"]
+    environment:
+      LOCUST_HOST: http://rest:8080
+      API_KEY: token-secreto-123
+      LOADTEST_DATA: /app/data/processed/test.parquet
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      - rest
     networks: [fraudnet]
 
   # --- Monitoreo: Prometheus + Grafana + Evidently (drift) ------------------

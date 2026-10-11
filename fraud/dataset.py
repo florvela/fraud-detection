@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from itertools import islice
 
-import pandas as pd
-import typer
 from datasets import load_dataset
 from loguru import logger
+import pandas as pd
+import typer
 
 from fraud.config import RAW_DATA_DIR
 

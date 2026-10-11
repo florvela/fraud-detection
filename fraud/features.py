@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import pandas as pd
-import typer
 from loguru import logger
+import pandas as pd
 from sklearn.model_selection import train_test_split
+import typer
 
 from fraud.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 

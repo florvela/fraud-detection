@@ -15,9 +15,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 
+from loguru import logger
 import pandas as pd
 import typer
-from loguru import logger
 
 from fraud.config import PROCESSED_DATA_DIR
 from fraud.features import FEATURES, TARGET

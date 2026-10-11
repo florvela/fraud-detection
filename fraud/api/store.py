@@ -76,6 +76,9 @@ class TransactionStore:
                     challenger_version  TEXT,
                     challenger_prob     REAL,
                     challenger_is_fraud INTEGER,
+                    federated_version   TEXT,
+                    federated_prob      REAL,
+                    federated_is_fraud  INTEGER,
                     decision            TEXT,
                     status              TEXT NOT NULL
                 );
@@ -87,7 +90,24 @@ class TransactionStore:
                 );
                 """
             )
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Agrega columnas nuevas a DBs ya existentes (idempotente).
+
+        Las columnas ``federated_*`` se agregaron después del esquema original: una
+        DB creada antes no las tiene. ``ALTER TABLE ADD COLUMN`` es nullable y no
+        toca los datos previos.
+        """
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(transactions)")}
+        for col, decl in (
+            ("federated_version", "TEXT"),
+            ("federated_prob", "REAL"),
+            ("federated_is_fraud", "INTEGER"),
+        ):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE transactions ADD COLUMN {col} {decl}")
 
     # ---------------------------------------------------------------- scoring
     def record_scoring(
@@ -99,6 +119,7 @@ class TransactionStore:
         decision: str,
         status: str,
         transaction_id: str | None = None,
+        federated: dict | None = None,
     ) -> str:
         """Guarda una transacción puntuada. Devuelve el transaction_id."""
         tx_id = transaction_id or f"tx-{uuid.uuid4().hex[:12]}"
@@ -113,6 +134,9 @@ class TransactionStore:
             (challenger or {}).get("model_version"),
             _as_float((challenger or {}).get("probability")),
             _as_int((challenger or {}).get("is_fraud")),
+            (federated or {}).get("model_version"),
+            _as_float((federated or {}).get("probability")),
+            _as_int((federated or {}).get("is_fraud")),
             decision,
             status,
         )
@@ -123,8 +147,9 @@ class TransactionStore:
                     transaction_id, ts, features, amt,
                     champion_version, champion_prob, champion_is_fraud,
                     challenger_version, challenger_prob, challenger_is_fraud,
+                    federated_version, federated_prob, federated_is_fraud,
                     decision, status
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 row,
             )
@@ -210,6 +235,7 @@ class TransactionStore:
                 SELECT t.transaction_id, t.amt,
                        t.champion_prob, t.champion_is_fraud,
                        t.challenger_prob, t.challenger_is_fraud,
+                       t.federated_prob, t.federated_is_fraud,
                        l.label
                 FROM transactions t
                 JOIN labels l ON l.transaction_id = t.transaction_id
@@ -284,6 +310,20 @@ def _tx_to_dict(tx: sqlite3.Row, lbl: sqlite3.Row | None) -> dict:
         }
     else:
         d["challenger"] = None
+    # `federated_*` puede no estar en el SELECT de filas viejas (clave ausente en el Row).
+    tx_cols = set(tx.keys())
+    fed_version = tx["federated_version"] if "federated_version" in tx_cols else None
+    fed_prob = tx["federated_prob"] if "federated_prob" in tx_cols else None
+    if fed_version is not None or fed_prob is not None:
+        d["federated"] = {
+            "model_version": tx["federated_version"],
+            "probability": tx["federated_prob"],
+            "is_fraud": None
+            if tx["federated_is_fraud"] is None
+            else bool(tx["federated_is_fraud"]),
+        }
+    else:
+        d["federated"] = None
     if lbl is not None:
         d["label"] = {"label": lbl["label"], "source": lbl["source"], "ts": lbl["ts"]}
     return d

@@ -1,0 +1,4 @@
+# Prueba de carga del borde REST (simula muchos clientes y mide latencias/RPS).
+locust==2.31.8
+pandas==2.2.3
+pyarrow==17.0.0

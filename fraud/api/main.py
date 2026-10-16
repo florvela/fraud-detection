@@ -5,10 +5,10 @@ from __future__ import annotations
 from enum import Enum
 import os
 
-from fastapi import FastAPI, HTTPException, Security
-from fastapi.security.api_key import APIKeyHeader
+from fastapi import Depends, FastAPI, HTTPException, Request
 from loguru import logger
 
+from fraud.api import security
 from fraud.api.model_loader import ModelStore
 from fraud.api.schemas import (
     DecisionRequest,
@@ -16,6 +16,12 @@ from fraud.api.schemas import (
     PredictionResponse,
     Transaction,
 )
+from fraud.api.security import ROLE_ANALYST, ROLE_MLOPS, Principal, require_role
+
+# Dependencias de autorización reutilizables (singletons a nivel módulo: evitamos
+# llamar require_role dentro de los defaults de cada endpoint).
+auth_analyst = require_role(ROLE_ANALYST, ROLE_MLOPS)  # analista o mlops (o admin)
+auth_mlops = require_role(ROLE_MLOPS)                  # sólo mlops (o admin)
 
 # Orden de features canónico. Lo tomamos de `federated_model` (módulo liviano,
 # solo numpy/pandas) y NO de `fraud.features`, que arrastra typer/sklearn del
@@ -39,22 +45,22 @@ try:
 except Exception as exc:  # noqa: BLE001 - /metrics es opcional (p.ej. dev local sin la lib)
     logger.debug(f"Prometheus instrumentator no disponible, sigo sin /metrics: {exc}")
 
-api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
-_valid_tokens = os.getenv("API_KEYS", "token-secreto-123")
-AUTHORIZED_CLIENTS = {t.strip() for t in _valid_tokens.split(",") if t.strip()}
+# SAIF Capa 3 — Rate limiting: registramos el limiter y el handler del 429 (si slowapi
+# está instalado; si no, queda como no-op y la API funciona igual).
+if security.SLOWAPI_OK:
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
 
-
-def validate_token(api_key: str = Security(api_key_header)) -> str:
-    if api_key not in AUTHORIZED_CLIENTS:
-        raise HTTPException(status_code=403, detail="API Key inválida o ausente")
-    return api_key
+    app.state.limiter = security.limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Infra"])
 def health() -> HealthResponse:
     status = "ok" if store.loaded else "model_not_loaded"
     version = store.version if store.loaded else "unknown"
-    return HealthResponse(status=status, model_version=version)
+    sha = store.sha256 if store.loaded else None
+    return HealthResponse(status=status, model_version=version, model_sha256=sha)
 
 
 # Tipado nativo por columna para serializar a JSON/SQLite sin tipos numpy.
@@ -104,9 +110,11 @@ def _load_seed_frauds(n: int, seed: int) -> tuple[list[dict], str]:
 
 
 @app.post("/v1/predict", response_model=PredictionResponse, tags=["Model v1"])
+@security.rate_limit()  # SAIF Capa 3 — frena abuso/scraping (configurable con RATE_LIMIT)
 def predict(
+    request: Request,  # requerido por slowapi para identificar al cliente
     transaction: Transaction,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_analyst),
 ) -> PredictionResponse:
     # Normaliza la transacción a un dict plano (resuelve los Enum de Pydantic)
     feature_order = store.feature_order if store.loaded else FEATURE_ORDER
@@ -121,11 +129,21 @@ def predict(
     except Exception as err:  # noqa: BLE001 - cualquier fallo del scoring -> 502
         raise HTTPException(status_code=502, detail=f"No se pudo puntuar la transacción: {err}")
 
+    # SAIF Capa 8 — auditoría: quién puntuó qué y cuál fue la decisión.
+    security.audit(
+        "predict",
+        principal=principal,
+        transaction_id=result.get("transaction_id"),
+        decision=result.get("decision"),
+        probability=result.get("probability"),
+    )
     return PredictionResponse(**result)
 
 
 @app.get("/v1/model-info", tags=["Model v1"])
-def model_info() -> dict:
+def model_info(
+    principal: Principal = Depends(auth_analyst),
+) -> dict:
     if not store.loaded:
         raise HTTPException(status_code=503, detail="Modelo no disponible")
     # El champion que REALMENTE decide es el del núcleo gRPC (si hay delegación);
@@ -141,6 +159,56 @@ def model_info() -> dict:
     }
 
 
+@app.get("/v1/model-card", tags=["Model v1"])
+def model_card(
+    principal: Principal = Depends(auth_analyst),
+) -> dict:
+    """SAIF Capa 8 (gobernanza) — Model Card del champion servido.
+
+    Documenta qué modelo está en producción: versión, hash de integridad, orden de
+    features, métricas y uso previsto. Es la pieza de gobernanza que la clase de
+    seguridad pide para dar trazabilidad ("qué hizo cada modelo con qué datos").
+    """
+    if not store.loaded:
+        raise HTTPException(status_code=503, detail="Modelo no disponible")
+    info = store.info
+    return {
+        "model_name": "fraud-detection",
+        "version": info.get("version"),
+        "source": info.get("source"),
+        "sha256": info.get("sha256"),
+        "feature_order": store.feature_order,
+        "metrics": info.get("metrics"),
+        "intended_use": (
+            "Scoring de transacciones con tarjeta para detección de fraude en tiempo real. "
+            "El champion decide (aprobar/retener) y el analista resuelve las retenidas."
+        ),
+        "limitations": (
+            "Entrenado sobre datos históricos (posible drift); sensible al desbalanceo de clases. "
+            "Un umbral muy bajo aumenta falsos positivos (fricción al cliente)."
+        ),
+        "security_controls": [
+            "AuthN/AuthZ con API keys por rol (analyst/mlops/admin)",
+            "Validación de entradas con Pydantic",
+            "Rate limiting por IP+key (slowapi)",
+            "Secretos en variables de entorno (no en el repo)",
+            "Log de auditoría por evento",
+            "Hash SHA-256 de integridad del artefacto",
+            "Entrenamiento federado con defensas (clipping, agregación robusta, privacidad diferencial)",
+        ],
+    }
+
+
+@app.get("/v1/audit", tags=["Seguridad"])
+def audit_log(
+    limit: int = 50,
+    principal: Principal = Depends(auth_analyst),
+) -> dict:
+    """SAIF Capa 8 — últimos eventos del log de auditoría (para verlos desde la UI)."""
+    entries = security.read_audit(limit=limit)
+    return {"count": len(entries), "entries": entries}
+
+
 # --------------------------------------------------------------------------- #
 # Endpoints del analista (UC2 revisión · UC3 denuncia post-mortem)
 # --------------------------------------------------------------------------- #
@@ -149,7 +217,7 @@ def model_info() -> dict:
 def list_reviews(
     status: str = "PENDING",
     limit: int = 100,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_analyst),
 ) -> dict:
     """Lista las transacciones en un estado dado (por defecto las retenidas)."""
     from fraud.api.store import get_store
@@ -161,7 +229,7 @@ def list_reviews(
 @app.get("/v1/transactions/{transaction_id}", tags=["Analista"])
 def get_transaction(
     transaction_id: str,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_analyst),
 ) -> dict:
     """Detalle de una transacción (raw + score champion + challenger + label)."""
     from fraud.api.store import get_store
@@ -176,7 +244,7 @@ def get_transaction(
 def decide_transaction(
     transaction_id: str,
     body: DecisionRequest,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_analyst),
 ) -> dict:
     """Resuelve una tx retenida: approve (legítima) o reject (fraude). Guarda label."""
     from fraud.api.store import get_store
@@ -184,13 +252,17 @@ def decide_transaction(
     ok = get_store().resolve(transaction_id, body.decision)
     if not ok:
         raise HTTPException(status_code=404, detail="Transacción inexistente")
+    security.audit(
+        "review.decision", principal=principal,
+        transaction_id=transaction_id, decision=body.decision,
+    )
     return {"transaction_id": transaction_id, "decision": body.decision, "status": "resolved"}
 
 
 @app.post("/v1/transactions/{transaction_id}/report-fraud", status_code=201, tags=["Analista"])
 def report_fraud(
     transaction_id: str,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_analyst),
 ) -> dict:
     """Denuncia post-mortem (UC3): pega un label tardío de fraude por transaction_id."""
     from fraud.api.store import SOURCE_POST_MORTEM, get_store
@@ -199,6 +271,7 @@ def report_fraud(
     if not s.exists(transaction_id):
         raise HTTPException(status_code=404, detail="Transacción inexistente")
     s.add_label(transaction_id, label=1, source=SOURCE_POST_MORTEM)
+    security.audit("report.fraud", principal=principal, transaction_id=transaction_id)
     return {"transaction_id": transaction_id, "label": 1, "source": SOURCE_POST_MORTEM}
 
 
@@ -207,7 +280,7 @@ def report_fraud(
 # --------------------------------------------------------------------------- #
 
 @app.post("/v1/mlops/evaluate", tags=["MLOps"])
-def mlops_evaluate(_client: str = Security(validate_token)) -> dict:
+def mlops_evaluate(principal: Principal = Depends(auth_mlops)) -> dict:
     """Compara challenger vs champion contra la ground truth acumulada (UC5)."""
     from fraud.api import evaluation
 
@@ -217,7 +290,7 @@ def mlops_evaluate(_client: str = Security(validate_token)) -> dict:
 @app.post("/v1/mlops/compare-federated", tags=["MLOps"])
 def mlops_compare_federated(
     threshold: float = 0.5,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_mlops),
 ) -> dict:
     """Benchmark offline sobre el test: **federado vs champion (centralizado)**.
 
@@ -278,7 +351,7 @@ def mlops_compare_federated(
 def mlops_deploy(
     action: str = "promote",
     source: str = "challenger",
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_mlops),
 ) -> dict:
     """Promueve un modelo en sombra a champion (o revierte) — UC6.
 
@@ -304,11 +377,15 @@ def mlops_deploy(
 
     # El serving ya recargó el Scorer; recargamos también el store de /model-info.
     store.reload()
+    security.audit(
+        "mlops.deploy", principal=principal,
+        deploy_action=action, source=source, result=result,
+    )
     return result
 
 
 @app.post("/v1/mlops/reload", tags=["MLOps"])
-def mlops_reload(_client: str = Security(validate_token)) -> dict:
+def mlops_reload(principal: Principal = Depends(auth_mlops)) -> dict:
     """Recarga champion + challenger en el serving tras un retrain, SIN reiniciar.
 
     Resetea el Scorer in-process, recarga el store de /model-info y, si el scoring
@@ -334,7 +411,7 @@ def mlops_reload(_client: str = Security(validate_token)) -> dict:
 def mlops_seed_frauds(
     n: int = 30,
     seed: int = 42,
-    _client: str = Security(validate_token),
+    principal: Principal = Depends(auth_mlops),
 ) -> dict:
     """Siembra fraudes post-mortem muestreando casos REALES del dataset para poblar la ground truth.
 
@@ -383,7 +460,7 @@ def mlops_seed_frauds(
 
 
 @app.post("/v1/mlops/train", status_code=202, tags=["MLOps"])
-def mlops_train(_client: str = Security(validate_token)) -> dict:
+def mlops_train(principal: Principal = Depends(auth_mlops)) -> dict:
     """Dispara el reentrenamiento (UC4).
 
     Si hay un Airflow con API REST configurado (`AIRFLOW_API_URL`), dispara el DAG

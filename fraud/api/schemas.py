@@ -83,3 +83,6 @@ class DecisionRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     model_version: str
+    model_sha256: str | None = Field(
+        None, description="SHA-256 del artefacto servido (control de integridad)"
+    )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent import futures
+import os
 
 import grpc
 import pandas as pd
@@ -12,6 +13,34 @@ from fraud.api.proto import fraud_pb2, fraud_pb2_grpc
 
 MODEL_NAME = "fraud-detection"
 GRPC_PORT = 50052  # puerto local (evitamos 50051 que ya usa Multipass)
+
+# SAIF Capa 1 — AuthN del núcleo de scoring. El profe mencionó que gRPC también debe
+# llevar autenticación: validamos una API key enviada en la metadata `x-api-key`.
+# Las keys válidas se leen de GRPC_API_KEYS (coma-separadas); default = token de demo.
+_GRPC_KEYS = {t.strip() for t in os.getenv("GRPC_API_KEYS", "token-secreto-123").split(",") if t.strip()}
+
+
+class ApiKeyInterceptor(grpc.ServerInterceptor):
+    """Interceptor que exige una `x-api-key` válida en la metadata de cada RPC.
+
+    Si la key falta o es inválida, aborta con UNAUTHENTICATED antes de ejecutar el
+    método. Así ningún cliente puede puntuar sin credencial (ni siquiera otro servicio
+    de la red interna). Es el equivalente gRPC del header X-API-KEY del borde REST.
+    """
+
+    def __init__(self, valid_keys: set[str]) -> None:
+        self._valid_keys = valid_keys
+
+        def _deny(_request, context):
+            context.abort(grpc.StatusCode.UNAUTHENTICATED, "x-api-key inválida o ausente")
+
+        self._deny_handler = grpc.unary_unary_rpc_method_handler(_deny)
+
+    def intercept_service(self, continuation, handler_call_details):
+        metadata = dict(handler_call_details.invocation_metadata or [])
+        if metadata.get("x-api-key") not in self._valid_keys:
+            return self._deny_handler
+        return continuation(handler_call_details)
 
 # El modelo se carga UNA sola vez al iniciar el servidor (nunca por request).
 store = ModelStore()
@@ -78,11 +107,14 @@ class FraudScoringServicer(fraud_pb2_grpc.FraudScoringServicer):
 
 
 def serve() -> None:
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        interceptors=[ApiKeyInterceptor(_GRPC_KEYS)],  # SAIF Capa 1: AuthN por API key
+    )
     fraud_pb2_grpc.add_FraudScoringServicer_to_server(FraudScoringServicer(), server)
     server.add_insecure_port(f"[::]:{GRPC_PORT}")
     server.start()
-    print(f"Servidor gRPC escuchando en localhost:{GRPC_PORT}")
+    print(f"Servidor gRPC escuchando en localhost:{GRPC_PORT} (auth por x-api-key activa)")
     server.wait_for_termination()
 
 

@@ -30,7 +30,10 @@ with DAG(
     description="Ingesta + features + entrenamiento + registro en MLflow (champion/challenger)",
     default_args=default_args,
     start_date=datetime(2026, 1, 1),
-    schedule="@daily",
+    # Manual (schedule=None): el retrain lo dispara el init en frío (seed) o la usuaria
+    # (UI "Entrenar" / Trigger de Airflow). Con @daily el scheduler auto-corría el DAG al
+    # despausarlo y aparecía un challenger "solo" — rompía la demo del champion malo.
+    schedule=None,
     catchup=False,
     tags=["fraude", "mlops2", "retrain"],
 ) as dag:

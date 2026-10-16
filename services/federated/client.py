@@ -18,20 +18,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import typer
 from loguru import logger
-
 from model import (
-    NUMERIC_FEATURES,
     CATEGORICAL_FEATURES,
+    NUMERIC_FEATURES,
     TARGET,
     build_model,
     get_weights,
     load_preprocessor,
     set_weights,
 )
+import numpy as np
+import pandas as pd
+import typer
 
 app = typer.Typer(add_completion=False, help="Cliente federado (un banco).")
 
@@ -39,22 +38,35 @@ _SERVICE_DIR = Path(__file__).resolve().parent
 _FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
 
-def _cargar_silo(silo_path: Path):
-    """Lee el parquet del banco y devuelve (X preprocesado, y)."""
+def _cargar_silo(silo_path: Path, poison_ratio: float = 0.0):
+    """Lee el parquet del banco y devuelve (X preprocesado, y).
+
+    Si ``poison_ratio`` > 0, simula un **cliente malicioso** que voltea esa fracción
+    de las etiquetas (*label flipping*): el ataque de envenenamiento visto en clase.
+    Con las defensas apagadas (FedAvg) esto degrada el modelo global round a round.
+    """
     df = pd.read_parquet(silo_path)
     pre = load_preprocessor()
     X = pre.transform(df[_FEATURES])
     y = df[TARGET].to_numpy(dtype=np.float32)
+    if poison_ratio > 0:
+        rng = np.random.default_rng(0)
+        idx = rng.choice(len(y), size=int(poison_ratio * len(y)), replace=False)
+        y[idx] = 1.0 - y[idx]  # voltea 0<->1
+        logger.warning(
+            "CLIENTE MALICIOSO: {} etiquetas volteadas ({:.0%} del silo {})",
+            len(idx), poison_ratio, silo_path.name,
+        )
     return X, y, pre.n_features
 
 
-def _make_client(silo_path: Path, local_epochs: int, lr: float, batch_size: int):
+def _make_client(silo_path: Path, local_epochs: int, lr: float, batch_size: int, poison_ratio: float = 0.0):
     """Construye la instancia de NumPyClient (import de torch/flwr diferido)."""
     import flwr as fl
     import torch
     from torch.utils.data import DataLoader, TensorDataset
 
-    X, y, n_features = _cargar_silo(silo_path)
+    X, y, n_features = _cargar_silo(silo_path, poison_ratio=poison_ratio)
     n_pos = float((y == 1).sum())
     n_neg = float((y == 0).sum())
     pos_weight = torch.tensor([n_neg / max(n_pos, 1.0)], dtype=torch.float32)
@@ -100,7 +112,7 @@ def _make_client(silo_path: Path, local_epochs: int, lr: float, batch_size: int)
     class BancoClient(fl.client.NumPyClient):
         """NumPyClient que entrena el MLP sobre el silo de un banco."""
 
-        def get_parameters(self, config):  # noqa: D401
+        def get_parameters(self, config):
             return get_weights(model)
 
         def set_parameters(self, parameters):
@@ -131,15 +143,21 @@ def run(
     local_epochs: int = typer.Option(3, help="Épocas de entrenamiento local por round."),
     lr: float = typer.Option(1e-3, help="Learning rate (Adam)."),
     batch_size: int = typer.Option(256, help="Tamaño de batch local."),
+    poison_ratio: float = typer.Option(
+        None, help="Fracción de etiquetas a voltear (cliente malicioso). Default env FED_POISON o 0.",
+    ),
 ) -> None:
     """Levanta el cliente y lo conecta al servidor Flower."""
     import flwr as fl
 
     silo_path = silo or Path(os.getenv("FED_SILO", _SERVICE_DIR / "data" / "banco_a.parquet"))
     address = server_address or os.getenv("FED_SERVER", "127.0.0.1:8080")
+    poison = poison_ratio if poison_ratio is not None else float(os.getenv("FED_POISON", "0"))
 
-    logger.info("Cliente federado -> servidor {} | silo {}", address, silo_path)
-    client = _make_client(silo_path, local_epochs=local_epochs, lr=lr, batch_size=batch_size)
+    logger.info("Cliente federado -> servidor {} | silo {} | poison={}", address, silo_path, poison)
+    client = _make_client(
+        silo_path, local_epochs=local_epochs, lr=lr, batch_size=batch_size, poison_ratio=poison,
+    )
     fl.client.start_client(server_address=address, client=client.to_client())
 
 

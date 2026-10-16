@@ -20,6 +20,7 @@ RUN uv pip install --system --no-cache \
     "mlflow==2.16.2" boto3 \
     strawberry-graphql neo4j \
     prometheus-fastapi-instrumentator \
+    slowapi \
     loguru python-dotenv requests
 
 # torch: necesario para correr el MLP federado (fraud.federated_model) en sombra y,

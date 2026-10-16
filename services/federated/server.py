@@ -14,11 +14,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from loguru import logger
+from model import build_model, get_weights, load_preprocessor
 import numpy as np
 import typer
-from loguru import logger
-
-from model import build_model, get_weights, load_preprocessor
 
 app = typer.Typer(add_completion=False, help="Servidor federado FedAvg.")
 
@@ -58,6 +57,13 @@ def run(
     n_rounds = rounds if rounds is not None else int(os.getenv("FED_ROUNDS", "5"))
     address = server_address or os.getenv("FED_SERVER", "0.0.0.0:8080")
 
+    # --- Defensas SAIF (capa 5) — configurables por env; OFF por defecto (= FedAvg) ---
+    agg_method = os.getenv("FED_AGG", "fedavg")          # fedavg | mean | median | trimmed
+    clip_norm = float(os.getenv("FED_CLIP_NORM", "0"))   # 0 = sin clipping
+    dp_sigma = float(os.getenv("FED_DP_NOISE", "0"))     # 0 = sin privacidad diferencial
+    trim_ratio = float(os.getenv("FED_TRIM_RATIO", "0.1"))
+    defense_on = agg_method != "fedavg" or clip_norm > 0 or dp_sigma > 0
+
     initial_parameters = ndarrays_to_parameters(_pesos_iniciales())
 
     def _promedio_metricas(metrics):
@@ -79,10 +85,29 @@ def run(
             self.latest_parameters = kwargs.get("initial_parameters")
 
         def aggregate_fit(self, server_round, results, failures):
+            # Dejamos que FedAvg agregue las MÉTRICAS; los PESOS los recalculamos con
+            # las defensas si están activas (clipping + agregación robusta + ruido DP).
             params, metrics = super().aggregate_fit(server_round, results, failures)
+            if defense_on and results:
+                from robust import robust_aggregate
+
+                global_w = parameters_to_ndarrays(self.latest_parameters)
+                client_w = [parameters_to_ndarrays(r.parameters) for _, r in results]
+                n_examples = [r.num_examples for _, r in results]
+                robust = robust_aggregate(
+                    client_w, global_w, n_examples,
+                    method=agg_method, clip_norm=clip_norm,
+                    trim_ratio=trim_ratio, dp_sigma=dp_sigma,
+                )
+                params = ndarrays_to_parameters(robust)
+                logger.info(
+                    "Round {} agregado con DEFENSA (agg={}, clip={}, dp_sigma={}).",
+                    server_round, agg_method, clip_norm, dp_sigma,
+                )
+            elif params is not None:
+                logger.info("Round {} agregado (FedAvg, sin defensa).", server_round)
             if params is not None:
                 self.latest_parameters = params
-                logger.info("Round {} agregado (FedAvg).", server_round)
             return params, metrics
 
     strategy = SaveFedAvg(
@@ -95,7 +120,14 @@ def run(
         evaluate_metrics_aggregation_fn=_promedio_metricas,
     )
 
-    logger.info("Servidor FedAvg en {} | rounds={} | min_clients={}", address, n_rounds, min_clients)
+    defensa_txt = (
+        f"DEFENSA(agg={agg_method}, clip={clip_norm}, dp_sigma={dp_sigma})"
+        if defense_on else "FedAvg sin defensa"
+    )
+    logger.info(
+        "Servidor en {} | rounds={} | min_clients={} | {}",
+        address, n_rounds, min_clients, defensa_txt,
+    )
     fl.server.start_server(
         server_address=address,
         config=fl.server.ServerConfig(num_rounds=n_rounds),

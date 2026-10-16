@@ -7,12 +7,16 @@ Antes de correr, levanta los servidores:
     ./.venv/bin/python -m fraud.api.grpc_server
 """
 
+import os
 import time
 
 import grpc
 import requests
 
 from fraud.api.proto import fraud_pb2, fraud_pb2_grpc
+
+# SAIF Capa 1 — el núcleo gRPC exige una x-api-key en la metadata.
+GRPC_META = (("x-api-key", os.getenv("GRPC_API_KEY", "token-secreto-123")),)
 
 # Puerto publicado del núcleo gRPC. Lo definimos como constante (en vez de importarlo
 # de grpc_server) para que este cliente NO cargue el modelo localmente: así evitamos
@@ -82,7 +86,7 @@ def main() -> None:
         session.post(GRAPHQL_URL, json={"query": GQL_QUERY, "variables": {"tx": TX_GQL}}).json()
 
     def call_grpc():
-        stub.Predict(TX_GRPC)
+        stub.Predict(TX_GRPC, metadata=GRPC_META)
 
     try:
         # Una llamada de prueba a cada uno para validar que responden bien.
@@ -91,7 +95,7 @@ def main() -> None:
         rest_sample = rest_resp.json()
         gql_resp = session.post(GRAPHQL_URL, json={"query": GQL_QUERY, "variables": {"tx": TX_GQL}})
         gql_sample = gql_resp.json()["data"]["predict"]
-        grpc_sample = stub.Predict(TX_GRPC)
+        grpc_sample = stub.Predict(TX_GRPC, metadata=GRPC_META)
     except (requests.exceptions.ConnectionError, grpc.RpcError):
         print(
             "[ERROR] Faltan servidores. Levanta en dos terminales:\n"

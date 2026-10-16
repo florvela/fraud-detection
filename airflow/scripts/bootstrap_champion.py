@@ -15,13 +15,13 @@ Idempotente y tolerante al arranque: reintenta hasta que MLflow/MinIO estén lis
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import tempfile
 import time
-from pathlib import Path
 
 import joblib
-import mlflow
 from loguru import logger
+import mlflow
 from mlflow.tracking import MlflowClient
 
 from fraud.config import MODELS_DIR
@@ -29,6 +29,7 @@ from fraud.config import MODELS_DIR
 MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "fraud-detection")
 CHAMPION_ALIAS = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
 CHALLENGER_ALIAS = os.getenv("MLFLOW_CHALLENGER_ALIAS", "challenger")
+FEDERATED_ALIAS = os.getenv("MLFLOW_FEDERATED_ALIAS", "federated")
 EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT", "fraud-detection")
 ARTIFACT_DIR = "model_artifact"
 BAD_MODEL_FILE = MODELS_DIR / "badmodel.joblib"
@@ -74,13 +75,16 @@ def main() -> None:
             )
 
     client.set_registered_model_alias(MODEL_NAME, CHAMPION_ALIAS, mv.version)
-    try:
-        client.delete_registered_model_alias(MODEL_NAME, CHALLENGER_ALIAS)
-    except Exception:  # noqa: BLE001 - puede no existir
-        pass
+    # Limpiamos las SOMBRAS (challenger + federado) para arrancar la demo con el champion
+    # malo SOLO: así no aparece una sombra "fantasma" de una corrida anterior persistida.
+    for alias in (CHALLENGER_ALIAS, FEDERATED_ALIAS):
+        try:
+            client.delete_registered_model_alias(MODEL_NAME, alias)
+        except Exception as exc:  # noqa: BLE001 - puede no existir, no es un error
+            logger.debug(f"No se pudo borrar el alias '{alias}' (quizá no existía): {exc}")
     logger.success(
         f"Champion inicial (malo) sembrado: v{mv.version} ({version}) como "
-        f"'{CHAMPION_ALIAS}'. Alias '{CHALLENGER_ALIAS}' limpiado."
+        f"'{CHAMPION_ALIAS}'. Aliases '{CHALLENGER_ALIAS}' y '{FEDERATED_ALIAS}' limpiados."
     )
 
 

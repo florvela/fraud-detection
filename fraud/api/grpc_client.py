@@ -15,6 +15,9 @@ from fraud.api.proto import fraud_pb2, fraud_pb2_grpc
 
 GRPC_HOST = os.getenv("GRPC_HOST")
 GRPC_PORT = os.getenv("GRPC_PORT", "50052")
+# SAIF Capa 1 — la API key que el borde REST presenta al núcleo gRPC (metadata).
+GRPC_API_KEY = os.getenv("GRPC_API_KEY", "token-secreto-123")
+_GRPC_METADATA = (("x-api-key", GRPC_API_KEY),)
 
 _channel: grpc.Channel | None = None
 _stub: fraud_pb2_grpc.FraudScoringStub | None = None
@@ -47,7 +50,7 @@ def predict(row: dict) -> tuple[bool, float, str]:
         hour=int(row["hour"]),
         age=int(row["age"]),
     )
-    pred = _get_stub().Predict(tx)
+    pred = _get_stub().Predict(tx, metadata=_GRPC_METADATA)
     return bool(pred.is_fraud), float(pred.probability), str(pred.model_version)
 
 
@@ -58,7 +61,7 @@ def get_model_info() -> tuple[str, str] | None:
     if not delegates_to_grpc():
         return None
     try:
-        info = _get_stub().GetModelInfo(fraud_pb2.Empty())
+        info = _get_stub().GetModelInfo(fraud_pb2.Empty(), metadata=_GRPC_METADATA)
         return str(info.name), str(info.version)
     except grpc.RpcError:
         return None
@@ -70,7 +73,7 @@ def reload_remote() -> str | None:
     if not delegates_to_grpc():
         return None
     try:
-        info = _get_stub().Reload(fraud_pb2.Empty())
+        info = _get_stub().Reload(fraud_pb2.Empty(), metadata=_GRPC_METADATA)
         return str(info.version)
     except grpc.RpcError:
         return None

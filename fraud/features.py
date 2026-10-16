@@ -47,17 +47,26 @@ def split_data(
 
 @app.command()
 def main(seed: int = typer.Option(42, help="Semilla del split")) -> None:
-    """Lee data/raw, arma features, splitea y guarda en data/processed/"""
-    df = pd.read_parquet(RAW_DATA_DIR / "fraud_sample.parquet")
+    """Lee el raw del data lake (fallback local), arma features, splitea y sube a processed/"""
+    from fraud import datalake
+
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    raw_path = RAW_DATA_DIR / "fraud_sample.parquet"
+    # Leemos el raw DEL DATA LAKE (MinIO); si no está, caemos al archivo local del ingest.
+    datalake.download("raw/fraud_sample.parquet", raw_path)
+    df = pd.read_parquet(raw_path)
     features = build_features(df)
     train, val, test = split_data(features, seed=seed)
 
     PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
     for name, part in [("train", train), ("val", val), ("test", test)]:
-        part.to_parquet(PROCESSED_DATA_DIR / f"{name}.parquet", index=False)
+        out = PROCESSED_DATA_DIR / f"{name}.parquet"
+        part.to_parquet(out, index=False)
         logger.info(f"{name:5s}: {len(part):>7,} filas | fraude {part[TARGET].mean():.2%}")
+        # Los procesados también aterrizan en el lake (capa processed/).
+        datalake.upload(out, f"processed/{name}.parquet")
 
-    logger.success("Splits guardados en data/processed/")
+    logger.success("Splits guardados en data/processed/ y subidos al data lake")
 
 
 if __name__ == "__main__":

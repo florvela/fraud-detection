@@ -66,6 +66,12 @@ def main(
     df.to_parquet(output_path, index=False)
     logger.success(f"Guardado: {output_path}")
 
+    # Data lake: el raw aterriza en MinIO (bucket data-lake, capa raw/). Así el resto
+    # del pipeline lee del lake y no de HuggingFace. Best-effort: si no hay MinIO, sigue local.
+    from fraud import datalake
+
+    datalake.upload(output_path, "raw/fraud_sample.parquet")
+
 
 if __name__ == "__main__":
     app()

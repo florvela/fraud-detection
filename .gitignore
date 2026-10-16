@@ -203,3 +203,6 @@ services/monitoring/reports/
 *.local.md
 *.local.*
 .notas/
+
+# Logs de auditoría (SAIF capa 8) — no versionar
+logs/*.log

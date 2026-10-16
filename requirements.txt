@@ -20,6 +20,7 @@ joblib
 pydantic
 fastapi
 uvicorn[standard]
+slowapi
 strawberry-graphql
 grpcio
 grpcio-tools

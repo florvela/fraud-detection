@@ -21,6 +21,15 @@ import pytest
 _TMP = Path(tempfile.mkdtemp(prefix="fraud-tests-"))
 os.environ["FRAUD_DB"] = str(_TMP / "test_fraud.db")
 os.environ["FRAUD_REVIEW_THRESHOLD"] = "0.0"
+# Rate limit muy alto para que los tests (que hacen muchas llamadas seguidas) no
+# disparen el 429 si slowapi está instalado en el entorno de CI/imagen.
+os.environ.setdefault("RATE_LIMIT", "100000/minute")
+# Auditoría a un archivo temporal (no ensucia logs/ del repo durante los tests).
+os.environ.setdefault("AUDIT_LOG", str(_TMP / "audit.log"))
+# Roles: el token por defecto actúa como admin (hace todo). Además definimos tokens
+# de analista y mlops para ejercitar el RBAC en test_security.py.
+os.environ.setdefault("ANALYST_API_KEYS", "analyst-key")
+os.environ.setdefault("MLOPS_API_KEYS", "mlops-key")
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
 _CHAMPION = _MODELS / "model.joblib"

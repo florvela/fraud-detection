@@ -1,9 +1,14 @@
 """Cliente gRPC de prueba: llama al servicio de fraude (unary + streaming)."""
 
+import os
+
 import grpc
 
 from fraud.api.grpc_server import GRPC_PORT
 from fraud.api.proto import fraud_pb2, fraud_pb2_grpc
+
+# SAIF Capa 1 — el servidor gRPC exige una x-api-key en la metadata.
+META = (("x-api-key", os.getenv("GRPC_API_KEY", "token-secreto-123")),)
 
 
 def separator(title: str) -> None:
@@ -35,18 +40,18 @@ def main() -> None:
     try:
         # --- unary: 1 -> 1 ---
         separator("1) unary  (Predict)")
-        r = stub.Predict(EXAMPLE)
+        r = stub.Predict(EXAMPLE, metadata=META)
         print(f"is_fraud={r.is_fraud} | probability={r.probability} | version={r.model_version}")
 
         # --- server streaming: 1 lote -> N predicciones ---
         separator("2) streaming  (PredictStream sobre un lote de 3)")
         batch = fraud_pb2.TransactionBatch(items=[EXAMPLE, EXAMPLE, EXAMPLE])
-        for i, p in enumerate(stub.PredictStream(batch), start=1):
+        for i, p in enumerate(stub.PredictStream(batch, metadata=META), start=1):
             print(f"  item {i}: is_fraud={p.is_fraud} | probability={p.probability}")
 
         # --- metadatos ---
         separator("3) metadatos  (GetModelInfo)")
-        info = stub.GetModelInfo(fraud_pb2.Empty())
+        info = stub.GetModelInfo(fraud_pb2.Empty(), metadata=META)
         print(f"name={info.name} | version={info.version}")
     except grpc.RpcError as err:
         print(

@@ -14,6 +14,7 @@ resto de la API no cambia según el origen.
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 import joblib
@@ -22,6 +23,23 @@ from loguru import logger
 from fraud.config import MODELS_DIR
 
 MODEL_FILE = MODELS_DIR / "model.joblib"
+
+
+def _sha256_of(path) -> str | None:
+    """SHA-256 del archivo del modelo (control de integridad — SAIF capa 7).
+
+    Permite verificar que el artefacto servido es exactamente el esperado y que no
+    fue manipulado (p. ej. un ataque de envenenamiento que reemplaza el .joblib).
+    """
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception as exc:  # noqa: BLE001 - el hash es informativo, nunca debe tumbar la carga
+        logger.debug(f"No se pudo calcular el sha256 de {path}: {exc}")
+        return None
 
 # Config del registry (se activa solo si MLFLOW_TRACKING_URI está seteada)
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
@@ -41,11 +59,17 @@ class ModelStore:
     siempre: el champion desde `models/model.joblib` o el alias `champion`.
     """
 
-    def __init__(self, alias: str | None = None, local_file=None) -> None:
+    def __init__(self, alias: str | None = None, local_file=None, require_alias: bool = False) -> None:
         self._artifact: dict | None = None
         self._source: str | None = None
+        self._sha256: str | None = None
         self._alias = alias or MLFLOW_MODEL_ALIAS
         self._local_file = local_file or MODEL_FILE
+        # Si es True, el modelo SOLO se carga desde el registry (nunca cae a un .joblib
+        # local). Se usa para las SOMBRAS (challenger/federado): así, recién levantado y
+        # sin ese alias en el registry, la sombra NO existe (aunque haya un .joblib viejo
+        # en models/). Aparece recién cuando el DAG registra el alias y se recarga.
+        self._require_alias = require_alias
 
     @property
     def loaded(self) -> bool:
@@ -68,17 +92,20 @@ class ModelStore:
         if MLFLOW_TRACKING_URI:
             if self._load_from_registry():
                 return True
+            if self._require_alias or MLFLOW_REQUIRE_ALIAS == "1":
+                # Sombra (challenger/federado): sin alias en el registry NO se carga
+                # (nunca cae a un .joblib local viejo). Es lo esperado hasta correr el DAG.
+                logger.info(
+                    "alias '{}' no está en el registry (require_alias): la sombra no se carga.",
+                    self._alias,
+                )
+                return False
             logger.error(
                 "REGISTRY FALLÓ para alias '{}': sirviendo FALLBACK LOCAL {} — "
                 "puede NO ser el champion esperado",
                 self._alias,
                 self._local_file,
             )
-            if MLFLOW_REQUIRE_ALIAS == "1":
-                logger.error(
-                    "MLFLOW_REQUIRE_ALIAS=1: NO se cae al archivo local; modelo NO cargado."
-                )
-                return False
         return self._load_from_file()
 
     def _load_from_registry(self) -> bool:
@@ -99,6 +126,7 @@ class ModelStore:
             )
             local_path = mlflow.artifacts.download_artifacts(artifact_uri=artifact_uri)
             self._artifact = joblib.load(local_path)
+            self._sha256 = _sha256_of(local_path)
             self._source = "registry"
             logger.success(
                 f"Modelo cargado del registry ({MLFLOW_MODEL_NAME}@{self._alias}, "
@@ -114,6 +142,7 @@ class ModelStore:
             logger.error(f"No existe el modelo local en {self._local_file}")
             return False
         self._artifact = joblib.load(self._local_file)
+        self._sha256 = _sha256_of(self._local_file)
         self._source = "local"
         logger.success(f"Modelo cargado del archivo local {self._local_file}")
         return True
@@ -122,6 +151,7 @@ class ModelStore:
         """Vuelve a cargar el champion (p.ej. tras una promoción en el registry)."""
         self._artifact = None
         self._source = None
+        self._sha256 = None
         return self.load()
 
     @property
@@ -141,9 +171,15 @@ class ModelStore:
         return self._require()["metrics"]
 
     @property
+    def sha256(self) -> str | None:
+        """Hash SHA-256 del artefacto cargado (control de integridad)."""
+        return self._sha256
+
+    @property
     def info(self) -> dict:
         info = {k: v for k, v in self._require().items() if k != "pipeline"}
         info["source"] = self._source
+        info["sha256"] = self._sha256
         return info
 
     def _require(self) -> dict:
@@ -168,10 +204,24 @@ def make_champion() -> ModelStore:
 
 
 def make_challenger() -> ModelStore:
-    """ModelStore del challenger (en sombra). Puede no existir: load() devuelve False."""
-    return ModelStore(alias=MLFLOW_CHALLENGER_ALIAS, local_file=CHALLENGER_FILE)
+    """ModelStore del challenger (en sombra). Puede no existir: load() devuelve False.
+
+    `require_alias=True`: en el stack con MLflow, el challenger SOLO existe si el DAG
+    registró el alias `challenger`. Nunca se carga de un `.joblib` local viejo (así, recién
+    levantado, no aparece una sombra fantasma). En dev/tests sin MLflow, cae al local.
+    """
+    return ModelStore(
+        alias=MLFLOW_CHALLENGER_ALIAS, local_file=CHALLENGER_FILE, require_alias=True
+    )
 
 
 def make_federated() -> ModelStore:
-    """ModelStore del federado (en sombra). Puede no existir: load() devuelve False."""
-    return ModelStore(alias=MLFLOW_FEDERATED_ALIAS, local_file=FEDERATED_FILE)
+    """ModelStore del federado (en sombra). Puede no existir: load() devuelve False.
+
+    `require_alias=True`: igual que el challenger, el federado SOLO aparece tras correr el
+    DAG `fraud_federate_pipeline` (que registra el alias `federated`). No se carga de
+    `models/federated.joblib` en el stack con MLflow. En dev/tests sin MLflow, cae al local.
+    """
+    return ModelStore(
+        alias=MLFLOW_FEDERATED_ALIAS, local_file=FEDERATED_FILE, require_alias=True
+    )

@@ -31,8 +31,18 @@ import streamlit as st
 # --------------------------------------------------------------------------- #
 
 REST_URL = os.getenv("REST_URL", "http://rest:8080").rstrip("/")
-API_KEY = os.getenv("API_KEY", "token-secreto-123")
+API_KEY = os.getenv("API_KEY", "token-secreto-123")           # rol admin (hace todo)
 HTTP_TIMEOUT = 5
+
+# Tokens por rol (SAIF capa 1). Permiten demostrar el RBAC desde la UI: se elige el rol
+# en el sidebar y todas las llamadas usan ese token. Defaults alineados con el compose.
+ANALYST_KEY = os.getenv("ANALYST_API_KEY", "analyst-key")
+MLOPS_KEY = os.getenv("MLOPS_API_KEY", "mlops-key")
+ROLE_TOKENS = {
+    "Admin (todo)": API_KEY,
+    "Analista (revisión)": ANALYST_KEY,
+    "MLOps (modelos)": MLOPS_KEY,
+}
 
 # Fallback si la API todavía no está disponible o el modelo no expone categorías.
 # Los valores reales se leen del modelo servido (ver `_catalogos`).
@@ -43,13 +53,34 @@ CATEGORIES_FALLBACK = [
 ]
 GENDERS_FALLBACK = ["F", "M"]
 
+# Presets para los botones de "Scoring manual" (precargan el formulario con un clic).
+PRESET_ESCAPA = {  # fraude REAL que el champion MALO DEJA PASAR (~11 %, APROBADA)
+    "amt": 925.94, "category": "shopping_net", "gender": "M", "city_pop": 4653,
+    "lat": 40.5046, "long": -77.7186, "merch_lat": 41.4437, "merch_long": -78.3918,
+    "hour": 12, "age": 22,
+}
+PRESET_REVISION = {  # tx que el champion MALO RETIENE (~92 %, PENDING -> cola de revisión)
+    "amt": 800.0, "category": "grocery_pos", "gender": "F", "city_pop": 3500,
+    "lat": 41.44, "long": -78.39, "merch_lat": 34.05, "merch_long": -118.24,
+    "hour": 2, "age": 55,
+}
+# key de st.session_state por cada campo del formulario de scoring.
+_SM_KEYS = {campo: f"sm_{campo}" for campo in PRESET_ESCAPA}
+
 
 # --------------------------------------------------------------------------- #
 # Helpers de la API REST
 # --------------------------------------------------------------------------- #
 
+def _current_key() -> str:
+    """Token activo según el rol elegido en el sidebar (default: admin)."""
+    import streamlit as st
+
+    return st.session_state.get("api_key", API_KEY)
+
+
 def _headers() -> dict:
-    return {"X-API-KEY": API_KEY}
+    return {"X-API-KEY": _current_key()}
 
 
 def predecir(transaccion: dict) -> dict:
@@ -147,6 +178,15 @@ def obtener_model_info() -> dict:
     return resp.json()
 
 
+def obtener_auditoria(limit: int = 50) -> list[dict]:
+    """Últimos eventos del log de auditoría (SAIF capa 8)."""
+    resp = requests.get(
+        f"{REST_URL}/v1/audit", params={"limit": limit}, headers=_headers(), timeout=HTTP_TIMEOUT
+    )
+    resp.raise_for_status()
+    return resp.json().get("entries", [])
+
+
 def _catalogos() -> tuple[list[str], list[str]]:
     """Categorías y géneros válidos, leídos del modelo servido (con fallback).
 
@@ -167,29 +207,59 @@ def _catalogos() -> tuple[list[str], list[str]]:
 # Vistas
 # --------------------------------------------------------------------------- #
 
+def _aplicar_preset(preset: dict, categories: list[str], genders: list[str]) -> None:
+    """Carga un preset en el formulario (vía session_state). Clampa category/gender a
+    las opciones disponibles del modelo por si su vocabulario difiere."""
+    for campo, valor in preset.items():
+        if campo == "category" and valor not in categories:
+            valor = categories[0]
+        if campo == "gender" and valor not in genders:
+            valor = genders[0]
+        st.session_state[_SM_KEYS[campo]] = valor
+
+
 def vista_scoring_manual() -> None:
     st.header("Scoring manual")
-    st.caption("Cargá una transacción: el champion decide y el challenger (si hay) corre en sombra.")
+    st.caption("Cargá una transacción: el champion decide y el challenger (si hay) corre en sombra. "
+               "Usá los botones para precargar un caso de ejemplo.")
 
     categories, genders = _catalogos()
-    cat_default = categories.index("shopping_net") if "shopping_net" in categories else 0
-    gen_default = genders.index("M") if "M" in genders else 0
+
+    # Arranca precargado con el caso "fraude que se escapa" (money shot).
+    if _SM_KEYS["amt"] not in st.session_state:
+        _aplicar_preset(PRESET_ESCAPA, categories, genders)
+
+    # Botones de preset: cambian los valores del formulario de un clic (fuera del form).
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("🟢 Fraude que el champion DEJA PASAR", use_container_width=True,
+                     help="Precarga un fraude real que el champion malo aprueba (~11 %). "
+                          "El challenger bueno lo atrapa — ideal para el contraste."):
+            _aplicar_preset(PRESET_ESCAPA, categories, genders)
+            st.rerun()
+    with b2:
+        if st.button("🔴 Fraude que el champion RETIENE (→ revisión)", use_container_width=True,
+                     help="Precarga una tx que el champion malo manda a PENDING (~92 %): "
+                          "después aparece en la Cola de revisión del analista."):
+            _aplicar_preset(PRESET_REVISION, categories, genders)
+            st.rerun()
+
     with st.form("form_scoring"):
         col1, col2 = st.columns(2)
-        # Defaults = un fraude REAL que el champion malo (pocas iteraciones) DEJA PASAR
-        # pero el challenger bueno ATRAPA. Ideal para la demo.
+        # Los widgets leen/escriben su valor en session_state vía `key`, así los
+        # botones de preset de arriba pueden cambiarlos.
         with col1:
-            amt = st.number_input("Monto (amt)", min_value=0.01, value=925.94, step=1.0)
-            category = st.selectbox("Rubro (category)", categories, index=cat_default)
-            gender = st.selectbox("Género (gender)", genders, index=gen_default)
-            city_pop = st.number_input("Población ciudad (city_pop)", min_value=0, value=4653, step=1000)
-            hour = st.slider("Hora del día (hour)", 0, 23, 12)
+            amt = st.number_input("Monto (amt)", min_value=0.01, step=1.0, key=_SM_KEYS["amt"])
+            category = st.selectbox("Rubro (category)", categories, key=_SM_KEYS["category"])
+            gender = st.selectbox("Género (gender)", genders, key=_SM_KEYS["gender"])
+            city_pop = st.number_input("Población ciudad (city_pop)", min_value=0, step=1000, key=_SM_KEYS["city_pop"])
+            hour = st.slider("Hora del día (hour)", 0, 23, key=_SM_KEYS["hour"])
         with col2:
-            age = st.slider("Edad del titular (age)", 0, 120, 22)
-            lat = st.number_input("Latitud titular (lat)", -90.0, 90.0, value=40.5046)
-            long = st.number_input("Longitud titular (long)", -180.0, 180.0, value=-77.7186)
-            merch_lat = st.number_input("Latitud comercio (merch_lat)", -90.0, 90.0, value=41.4437)
-            merch_long = st.number_input("Longitud comercio (merch_long)", -180.0, 180.0, value=-78.3918)
+            age = st.slider("Edad del titular (age)", 0, 120, key=_SM_KEYS["age"])
+            lat = st.number_input("Latitud titular (lat)", -90.0, 90.0, key=_SM_KEYS["lat"])
+            long = st.number_input("Longitud titular (long)", -180.0, 180.0, key=_SM_KEYS["long"])
+            merch_lat = st.number_input("Latitud comercio (merch_lat)", -90.0, 90.0, key=_SM_KEYS["merch_lat"])
+            merch_long = st.number_input("Longitud comercio (merch_long)", -180.0, 180.0, key=_SM_KEYS["merch_long"])
         enviado = st.form_submit_button("Predecir")
 
     if not enviado:
@@ -349,11 +419,7 @@ def vista_transacciones() -> None:
 
 def vista_mlops() -> None:
     st.header("MLOps — champion / challenger / federado")
-    st.caption("Evaluá los modelos en sombra (challenger y federado) contra la ground "
-               "truth y, si mejoran, desplegá el que prefieras.")
 
-    st.info("Tras correr el DAG (retrain), apretá **Recargar modelos** para que el "
-            "serving tome el nuevo challenger sin reiniciar nada.")
     if st.button("🔄 Recargar modelos (tras retrain)"):
         try:
             r = recargar_modelos()
@@ -368,9 +434,6 @@ def vista_mlops() -> None:
 
     st.divider()
 
-    st.caption("Sembrá fraudes post-mortem para poblar la ground truth. Corré esto "
-               "DESPUÉS de **Recargar modelos** (con el challenger activo) para que se "
-               "registren las predicciones de ambos modelos y la evaluación tenga sentido.")
     if st.button("🌱 Sembrar 30 fraudes (post-mortem)"):
         try:
             r = sembrar_fraudes()
@@ -398,7 +461,31 @@ def vista_mlops() -> None:
         st.write(f"Transacciones con ground truth: **{rep.get('n_with_ground_truth', 0)}**")
         comp = {k: rep[k] for k in ("champion", "challenger", "federated") if rep.get(k)}
         if comp:
-            st.dataframe(pd.DataFrame(comp).T, use_container_width=True)
+            # Tabla: mostramos "n/d" en vez de None (p. ej. PR-AUC sin ambas clases).
+            tabla = pd.DataFrame(comp).T
+            st.dataframe(tabla.where(pd.notnull(tabla), "n/d"), use_container_width=True)
+
+            # Gráfico comparativo: SOLO métricas con valor real en todos los modelos
+            # (así PR-AUC no aparece como una barra falsa en 0 cuando viene None).
+            METRICAS = ["recall", "precision", "f1", "pr_auc"]
+            metricas_ok = [
+                m for m in METRICAS if all(datos.get(m) is not None for datos in comp.values())
+            ]
+            if metricas_ok:
+                chart = {
+                    modelo: {m: float(datos[m]) for m in metricas_ok}
+                    for modelo, datos in comp.items()
+                }
+                st.bar_chart(pd.DataFrame(chart))  # index = métricas, series = modelos
+
+            if "pr_auc" not in metricas_ok:
+                st.caption("ℹ️ **PR-AUC = n/d**: la ground truth tiene **una sola clase** "
+                           "(sembraste solo fraudes). Para que se calcule, resolvé en la "
+                           "**Cola de revisión** alguna transacción como **Aprobar** (legítima, "
+                           "label 0) además de los fraudes — ahí PR-AUC aparece con valor.")
+            st.caption("Criterio para elegir: priorizamos **recall de fraude** (atrapar más "
+                       "fraude); si empatan, desempata el **PR-AUC**. El cartel de abajo ya "
+                       "aplica ese criterio.")
         if rep.get("challenger_better"):
             st.success(f"El challenger mejora al champion ({rep.get('reason', '')}).")
         else:
@@ -411,9 +498,6 @@ def vista_mlops() -> None:
 
     st.divider()
     st.subheader("Benchmark federado vs centralizado")
-    st.caption("A demanda (NO es parte del reentrenamiento): evalúa el MLP federado y el "
-               "champion centralizado sobre el test y muestra cuánto del PR-AUC recupera "
-               "el federado sin que los bancos compartan datos — la conclusión del TP.")
     if st.button("📊 Comparar federado vs centralizado"):
         try:
             rep = comparar_federado()
@@ -494,8 +578,92 @@ def vista_modelo() -> None:
     if metricas:
         st.subheader("Métricas")
         st.dataframe(pd.DataFrame([metricas]).T.rename(columns={0: "valor"}), use_container_width=True)
+
+    # --- Integridad (SAIF capa 7) ---
+    st.subheader("Seguridad del modelo")
+    sha = info.get("sha256")
+    if sha:
+        st.caption("Hash SHA-256 de integridad del artefacto servido (verifica que no fue manipulado):")
+        st.code(sha, language=None)
+
     with st.expander("Respuesta completa (raw)"):
         st.json(info)
+
+
+def vista_seguridad() -> None:
+    st.header("Seguridad (framework SAIF)")
+    st.caption("Controles de seguridad del sistema, visibles desde la UI. El rol activo "
+               "se elige en el panel lateral (izquierda).")
+
+    # --- Capa 1: rol activo + prueba de RBAC ---
+    st.subheader("Autenticación y roles (RBAC)")
+    rol = st.session_state.get("rol_label", "Admin (todo)")
+    st.write(f"Rol activo ahora mismo: **{rol}**. Cambialo en el panel lateral y probá "
+             "una acción de MLOps: con rol *Analista* el sistema la rechaza.")
+    if st.button("Probar acción MLOps con el rol actual (evaluar)"):
+        try:
+            evaluar()
+            st.success("✅ Permitido: el rol actual puede ejecutar acciones de MLOps.")
+        except requests.HTTPError as err:
+            code = err.response.status_code if err.response is not None else "?"
+            if code == 403:
+                st.error("⛔ 403 — el rol actual NO está autorizado para MLOps (así debe ser "
+                         "para el analista). Cambiá a MLOps o Admin en el panel lateral.")
+            else:
+                st.warning(f"HTTP {code}: {err}")
+        except requests.RequestException as err:
+            st.error(f"No se pudo contactar la API: {err}")
+
+    st.divider()
+
+    # --- Integridad (hash) ---
+    st.subheader("Integridad del modelo (hash SHA-256)")
+    try:
+        info = obtener_model_info()
+        sha = info.get("sha256")
+        if sha:
+            st.caption("Hash del artefacto servido (verifica que no fue manipulado):")
+            st.code(sha, language=None)
+    except requests.RequestException as err:
+        st.caption(f"No disponible: {err}")
+
+    st.divider()
+
+    # --- Log de auditoría ---
+    st.subheader("Log de auditoría")
+    st.caption("Cada acción (predicción, revisión, deploy, etc.) queda registrada: quién "
+               "(rol + token enmascarado), qué y cuándo.")
+    if st.button("🔄 Actualizar auditoría"):
+        st.rerun()
+    try:
+        eventos = obtener_auditoria(limit=50)
+        if eventos:
+            st.dataframe(pd.DataFrame(eventos), use_container_width=True, hide_index=True)
+        else:
+            st.info("Todavía no hay eventos auditados. Hacé una predicción o una acción de MLOps.")
+    except requests.HTTPError as err:
+        code = err.response.status_code if err.response is not None else "?"
+        st.warning(f"No se pudo leer la auditoría (HTTP {code}) — ¿rol sin permiso?")
+    except requests.RequestException as err:
+        st.error(f"No se pudo leer la auditoría: {err}")
+
+    st.divider()
+
+    # --- Capas que se muestran en otro lado ---
+    st.subheader("Otros controles")
+    st.markdown(
+        "- **Validación (Pydantic):** el formulario de *Scoring manual* sólo deja "
+        "elegir categorías/valores válidos — una entrada inválida se rechaza con `422`.\n"
+        "- **Rate limiting:** se ve mejor con la **UI de Locust** "
+        "(`http://localhost:8089`): al generar muchas peticiones aparecen respuestas `429`.\n"
+        "- **gRPC:** el scoring corre detrás del núcleo gRPC, que también exige "
+        "API key (ver pestaña *Modelo* → \"Champion que decide (gRPC)\").\n"
+        "- **Secretos:** las claves viven en `.env` (gitignored), no en el repo; "
+        "esto se verifica en los archivos, no en la UI.\n"
+        "- **Entrenamiento federado:** defensas contra envenenamiento "
+        "(clipping + agregación robusta + privacidad diferencial) — ver el script "
+        "`demo_poisoning.py`."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -507,9 +675,18 @@ def main() -> None:
     st.title("Interfaz del analista de fraude")
 
     with st.sidebar:
+        st.subheader("Rol (seguridad)")
+        rol_label = st.selectbox(
+            "Autenticarse como", list(ROLE_TOKENS.keys()),
+            help="Elegí el rol con el que la UI se autentica. El analista no puede MLOps.",
+        )
+        st.session_state["api_key"] = ROLE_TOKENS[rol_label]
+        st.session_state["rol_label"] = rol_label
+        key = ROLE_TOKENS[rol_label]
+        st.caption(f"Token activo: `{'*' * max(0, len(key) - 4)}{key[-4:]}`")
+
         st.subheader("Configuración")
         st.write(f"REST_URL: `{REST_URL}`")
-        st.write(f"API_KEY: `{'*' * max(0, len(API_KEY) - 4)}{API_KEY[-4:]}`")
         try:
             salud = requests.get(f"{REST_URL}/health", timeout=HTTP_TIMEOUT)
             if salud.ok:
@@ -519,19 +696,22 @@ def main() -> None:
         except requests.RequestException:
             st.error("API REST: no disponible")
 
-    tab_scoring, tab_revision, tab_realizadas, tab_mlops, tab_modelo = st.tabs(
-        ["Scoring manual", "Cola de revisión", "Transacciones realizadas", "MLOps", "Modelo"]
+    tabs = st.tabs(
+        ["Scoring manual", "Cola de revisión", "Transacciones realizadas",
+         "MLOps", "Modelo", "Seguridad"]
     )
-    with tab_scoring:
+    with tabs[0]:
         vista_scoring_manual()
-    with tab_revision:
+    with tabs[1]:
         vista_cola_revision()
-    with tab_realizadas:
+    with tabs[2]:
         vista_transacciones()
-    with tab_mlops:
+    with tabs[3]:
         vista_mlops()
-    with tab_modelo:
+    with tabs[4]:
         vista_modelo()
+    with tabs[5]:
+        vista_seguridad()
 
 
 if __name__ == "__main__":

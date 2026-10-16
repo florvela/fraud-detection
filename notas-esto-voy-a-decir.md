@@ -57,9 +57,10 @@ curl -s localhost:8080/health
 
 > Corro dos pipelines.
 >
-> El de fraude tiene **5 pasos**: *ingest* baja 200.000 transacciones, *features* arma
-> los datos y el split, *merge_feedback* suma lo que etiquetamos recién, *train* entrena
-> el modelo bueno (300 árboles + balanceo) y *register* lo sube a MLflow como challenger.
+> El de fraude tiene **5 pasos**: *ingest* baja 200.000 transacciones y las sube al
+> **data lake (MinIO)**, *features* lee del lake, arma los datos y el split (y los vuelve
+> a subir), *merge_feedback* suma lo que etiquetamos recién, *train* entrena el modelo
+> bueno (300 árboles + balanceo) y *register* lo sube a MLflow como challenger.
 >
 > El federado tiene **4 pasos**: parte los datos en dos bancos, los entrena juntos **sin
 > compartir datos** (solo viajan los pesos), lo evalúa y lo registra como federado.
@@ -80,12 +81,17 @@ curl -s localhost:8080/health
 
 ## ACTO 6 — MinIO (data lake)
 
-[MinIO http://localhost:9001 → bucket `mlflow` → entrar a `1/<hash>/artifacts/model_artifact/`]
+[MinIO http://localhost:9001 → bucket `data-lake` → `raw/` y `processed/`]
+[bucket `mlflow` → `1/<hash>/artifacts/model_artifact/`]
 
-> Acá viven los artefactos pesados, en el data lake tipo S3 (los metadatos van a Postgres).
-> La ruta es `mlflow / experimento / run / artifacts / model_artifact / model.joblib`.
-> Ese hash largo es el **ID del run** de MLflow: cada entrenamiento genera uno y ahí queda
-> su `model.joblib`. El alias champion/challenger apunta justo a ese archivo.
+> MinIO es mi data lake tipo S3, con dos usos:
+>
+> - bucket **`data-lake`**: los **datos**. `raw/` = el dump crudo que bajó el ingest,
+> `processed/` = train/val/test. El pipeline lee de acá, no de HuggingFace ni de disco.
+> - bucket **`mlflow`**: los **modelos**. La ruta es
+> `mlflow / experimento / run / artifacts / model_artifact / model.joblib`; ese hash largo
+> es el **ID del run** de MLflow (uno por entrenamiento) y el alias champion/challenger
+> apunta a ese archivo.
 
 ## ACTO 7 — Evaluar y desplegar
 

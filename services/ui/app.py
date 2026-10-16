@@ -461,14 +461,28 @@ def vista_mlops() -> None:
         st.write(f"Transacciones con ground truth: **{rep.get('n_with_ground_truth', 0)}**")
         comp = {k: rep[k] for k in ("champion", "challenger", "federated") if rep.get(k)}
         if comp:
-            st.dataframe(pd.DataFrame(comp).T, use_container_width=True)
-            # Gráfico comparativo de las métricas 0-1 (una barra por modelo en cada métrica).
+            # Tabla: mostramos "n/d" en vez de None (p. ej. PR-AUC sin ambas clases).
+            tabla = pd.DataFrame(comp).T
+            st.dataframe(tabla.where(pd.notnull(tabla), "n/d"), use_container_width=True)
+
+            # Gráfico comparativo: SOLO métricas con valor real en todos los modelos
+            # (así PR-AUC no aparece como una barra falsa en 0 cuando viene None).
             METRICAS = ["recall", "precision", "f1", "pr_auc"]
-            chart = {
-                modelo: {m: (datos.get(m) or 0.0) for m in METRICAS}
-                for modelo, datos in comp.items()
-            }
-            st.bar_chart(pd.DataFrame(chart))  # index = métricas, series = modelos
+            metricas_ok = [
+                m for m in METRICAS if all(datos.get(m) is not None for datos in comp.values())
+            ]
+            if metricas_ok:
+                chart = {
+                    modelo: {m: float(datos[m]) for m in metricas_ok}
+                    for modelo, datos in comp.items()
+                }
+                st.bar_chart(pd.DataFrame(chart))  # index = métricas, series = modelos
+
+            if "pr_auc" not in metricas_ok:
+                st.caption("ℹ️ **PR-AUC = n/d**: la ground truth tiene **una sola clase** "
+                           "(sembraste solo fraudes). Para que se calcule, resolvé en la "
+                           "**Cola de revisión** alguna transacción como **Aprobar** (legítima, "
+                           "label 0) además de los fraudes — ahí PR-AUC aparece con valor.")
             st.caption("Criterio para elegir: priorizamos **recall de fraude** (atrapar más "
                        "fraude); si empatan, desempata el **PR-AUC**. El cartel de abajo ya "
                        "aplica ese criterio.")
